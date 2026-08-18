@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+utils/credentials.json
+data/
+downloads/
+*.parquet
+*.dbc
+*.dbf
+.venv
+~$*

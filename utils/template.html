@@ -1,0 +1,23 @@
+<html>
+    <head>
+        <title>Relatorio ELT</title>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+        <style>
+            body { font-family: Arial, sans-serif; background-color: #f9f9f9; color: #333; }
+            .container { background-color: #fff; padding: 30px; border-radius: 8px;
+                          margin: 50px auto; width: 80%; max-width: 800px; }
+            h1 { color: #e74c3c; font-size: 2rem; }
+            .error-message { background-color: #f4f4f4; padding: 10px; border-radius: 5px;
+                              white-space: pre-wrap; font-family: monospace; color: #e74c3c; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Relatorio de execucao</h1>
+            <p>Referencia: {execution_date}</p>
+            <p>DAG: {dag_id}</p>
+            <pre class="error-message">{texto_relatorio}</pre>
+            <p><a href="{log_url}">Logs da tarefa</a></p>
+        </div>
+    </body>
+</html>

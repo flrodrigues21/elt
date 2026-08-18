@@ -1,0 +1,1 @@
+ALTER TABLE global.schedule ADD COLUMN IF NOT EXISTS layer VARCHAR(20) NOT NULL DEFAULT 'bronze';
