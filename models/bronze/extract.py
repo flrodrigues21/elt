@@ -10,6 +10,7 @@ from elt.src.connectors.postgres_connector import PostgresConnector, registrar_e
 from elt.src.connectors.minio_connector import MinioConnector
 from elt.src.connectors.airflow_connections import AirflowConnector
 from elt.src.extractors import get_extractor, EXTRACTOR_REGISTRY
+from elt.src.utils.validation import validate_identifier, validate_strategy, sanitize_url
 
 load_dotenv()
 
@@ -77,7 +78,10 @@ def extract_and_load(
         type_source = str(row['type_source']).upper().strip()
         table_destiny = row['table_destiny']
         schema_destiny = row.get('schema_destiny') or schema_default
-        strategy = row.get('strategy_destiny') or 'truncate'
+        strategy = validate_strategy(row.get('strategy_destiny') or 'truncate')
+
+        validate_identifier(table_destiny, "table_destiny")
+        validate_identifier(schema_destiny, "schema_destiny")
 
         logging.info(
             f"[BRONZE] Processando [{type_source}] -> {schema_destiny}.{table_destiny}"
@@ -150,7 +154,7 @@ def extract_and_load(
                 row_dict = row.to_dict()
                 config = _parse_config(row_dict)
 
-                source_url = row.get('url', 'N/A')
+                source_url = sanitize_url(str(row.get('url', 'N/A')))
                 logging.info(f"[BRONZE] Conectado a origem: {source_url}")
 
                 if type_source == 'FTP':

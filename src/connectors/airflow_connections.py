@@ -5,6 +5,15 @@ from airflow.hooks.base import BaseHook
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_for_log(value):
+    if value is None:
+        return None
+    s = str(value)
+    if len(s) > 4:
+        return s[:2] + "***" + s[-2:]
+    return "***"
+
+
 class AirflowConnector:
     def __init__(self, connection_ids: list[str] | None = None):
         self.connection_ids = connection_ids or []
@@ -14,8 +23,7 @@ class AirflowConnector:
 
         logger.info(
             f"Connection '{conn_id}': conn_type='{conn.conn_type}', "
-            f"host='{conn.host}', port={conn.port}, schema='{conn.schema}', "
-            f"login='{conn.login}', extra='{conn.extra}'"
+            f"host='{conn.host}', port={conn.port}, schema='{conn.schema}'"
         )
 
         if conn.conn_type == "postgres":

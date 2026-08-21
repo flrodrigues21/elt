@@ -14,8 +14,8 @@ airflow connections add elt_bronze \
     --conn-type postgres \
     --conn-host elt-postgres \
     --conn-schema bronze \
-    --conn-login elt \
-    --conn-password elt123 \
+    --conn-login "${POSTGRES_USER}" \
+    --conn-password "${POSTGRES_PASSWORD}" \
     --conn-port 5432 \
     --conn-description "PostgreSQL Bronze - dados brutos"
 
@@ -24,8 +24,8 @@ airflow connections add elt_silver \
     --conn-type postgres \
     --conn-host elt-postgres \
     --conn-schema silver \
-    --conn-login elt \
-    --conn-password elt123 \
+    --conn-login "${POSTGRES_USER}" \
+    --conn-password "${POSTGRES_PASSWORD}" \
     --conn-port 5432 \
     --conn-description "PostgreSQL Silver - transformacao"
 
@@ -34,8 +34,8 @@ airflow connections add elt_gold \
     --conn-type postgres \
     --conn-host elt-postgres \
     --conn-schema gold \
-    --conn-login elt \
-    --conn-password elt123 \
+    --conn-login "${POSTGRES_USER}" \
+    --conn-password "${POSTGRES_PASSWORD}" \
     --conn-port 5432 \
     --conn-description "PostgreSQL Gold - dimensional"
 
@@ -44,8 +44,8 @@ airflow connections add elt_schedule \
     --conn-type postgres \
     --conn-host elt-postgres \
     --conn-schema elt \
-    --conn-login elt \
-    --conn-password elt123 \
+    --conn-login "${POSTGRES_USER}" \
+    --conn-password "${POSTGRES_PASSWORD}" \
     --conn-port 5432 \
     --conn-description "PostgreSQL ELT - schedule e controle_execucao"
 
@@ -54,11 +54,11 @@ airflow connections list
 
 echo "=== Criando usuario admin ==="
 airflow users create \
-    --username admin \
-    --password admin \
+    --username "${AIRFLOW_ADMIN_USERNAME}" \
+    --password "${AIRFLOW_ADMIN_PASSWORD}" \
     --firstname Admin \
     --lastname User \
     --role Admin \
-    --email admin@example.com || true
+    --email "${AIRFLOW_ADMIN_EMAIL}" || true
 
 echo "=== Setup completo ==="

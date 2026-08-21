@@ -9,6 +9,7 @@ from elt.src.schedule.schedule_table import load_schedule_table, get_steps
 from elt.src.connectors.postgres_connector import PostgresConnector, registrar_execucao
 from elt.src.connectors.minio_connector import MinioConnector
 from elt.src.connectors.airflow_connections import AirflowConnector
+from elt.src.utils.validation import validate_identifier, validate_strategy
 
 load_dotenv()
 
@@ -76,8 +77,11 @@ def transform(
     for _, row in df_steps.iterrows():
         table_destiny = row['table_destiny']
         schema_destiny = row.get('schema_destiny') or schema_default
-        strategy = row.get('strategy_destiny') or 'truncate'
+        strategy = validate_strategy(row.get('strategy_destiny') or 'truncate')
         query = row.get('query_source')
+
+        validate_identifier(table_destiny, "table_destiny")
+        validate_identifier(schema_destiny, "schema_destiny")
         config = _parse_config(row.to_dict())
         minio_source_config = config.get("minio_source")
 

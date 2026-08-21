@@ -5,14 +5,14 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-elt}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-elt123}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no .env}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - elt-pgdata:/var/lib/postgresql/data
       - ./sql/init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-elt}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-elt}"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -25,8 +25,8 @@ services:
     env_file:
       - .env
     environment:
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql://elt:elt123@elt-postgres:5432/airflow
-      AIRFLOW__CORE__FERNET_KEY: "81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs="
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@elt-postgres:5432/airflow"
+      AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     volumes:
       - ./docker/airflow_init.sh:/opt/airflow/init.sh
@@ -49,12 +49,12 @@ services:
     container_name: elt-airflow-webserver
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "127.0.0.1:${AIRFLOW_PORT:-8080}:8080"
     env_file:
       - .env
     environment:
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql://elt:elt123@elt-postgres:5432/airflow
-      AIRFLOW__CORE__FERNET_KEY: "81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs="
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@elt-postgres:5432/airflow"
+      AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
       AIRFLOW__CORE__DAGS_FOLDER: "/opt/airflow/elt"
@@ -88,8 +88,8 @@ services:
     env_file:
       - .env
     environment:
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql://elt:elt123@elt-postgres:5432/airflow
-      AIRFLOW__CORE__FERNET_KEY: "81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs="
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@elt-postgres:5432/airflow"
+      AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
       AIRFLOW__CORE__DAGS_FOLDER: "/opt/airflow/elt"
@@ -113,11 +113,11 @@ services:
     container_name: elt-minio
     restart: unless-stopped
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - elt-miniodata:/data
     command: server /data --console-address ":9001"

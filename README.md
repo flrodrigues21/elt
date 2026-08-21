@@ -6,16 +6,6 @@ Basta clonar e rodar `.\setup.ps1` para ter o lab completo funcionando.
 
 ---
 
-## Credenciais & URLs
-
-| Servico | URL | Usuario | Senha |
-|---------|-----|---------|-------|
-| **Airflow** | http://localhost:8080 | `admin` | `admin` |
-| **MinIO Console** | http://localhost:9001 | `minioadmin` | `minioadmin` |
-| **PostgreSQL** | `localhost:5432` | `elt` | `elt123` |
-
----
-
 ## Setup (3 passos)
 
 ```powershell
@@ -23,7 +13,7 @@ Basta clonar e rodar `.\setup.ps1` para ter o lab completo funcionando.
 git clone https://github.com/flrodrigues21/elt.git
 cd elt
 
-# 2. Subir tudo
+# 2. Subir tudo (gera .env com senhas seguras automaticamente)
 .\setup.ps1
 
 # 3. Rodar o pipeline
@@ -33,17 +23,46 @@ cd elt
 **Prerequisitos:** Docker Desktop instalado e rodando, ~4GB RAM livre.
 
 **O que sobe:**
-- PostgreSQL (porta 5432) -- 5 bancos: `elt`, `bronze`, `silver`, `gold`, `airflow`
-- Airflow webserver (porta 8080) + scheduler
-- MinIO (porta 9000 API / 9001 Console) -- datalake em parquet
+- PostgreSQL (127.0.0.1:5432) -- 5 bancos: `elt`, `bronze`, `silver`, `gold`, `airflow`
+- Airflow webserver (127.0.0.1:8080) + scheduler
+- MinIO (127.0.0.1:9000 API / 9001 Console) -- datalake em parquet
 
 **Commands uteis:**
 ```powershell
-.\setup.ps1          # Subir tudo
-.\setup.ps1 -Down    # Parar tudo e limpar volumes
-.\setup.ps1 -Status  # Ver status dos containers
-.\setup.ps1 -Logs    # Ver logs (escolhe container)
+.\setup.ps1                # Subir tudo
+.\setup.ps1 -Down          # Parar (volumes preservados)
+.\setup.ps1 -PurgeVolumes  # Parar e apagar dados (pede confirmacao)
+.\setup.ps1 -Status        # Ver status dos containers
+.\setup.ps1 -Logs          # Ver logs (escolhe container)
 ```
+
+> **Acesso de outra maquina:** As portas sao publicadas apenas em `127.0.0.1` por seguranca.
+> Para acessar por outra maquina na rede, altere as portas no `docker-compose.yml` para `0.0.0.0:PORTA:PORTA`.
+> **Atencao:** Isso pode expor os servicos pela rede local, VPN ou NetBird.
+
+---
+
+## Credenciais
+
+As credenciais sao geradas automaticamente pelo `.\setup.ps1` no arquivo `.env`.
+
+Para ver as credenciais, abra o arquivo `.env` na raiz do projeto.
+
+| Servico | URL | Arquivo |
+|---------|-----|---------|
+| **Airflow** | http://localhost:8080 | `.env` (`AIRFLOW_ADMIN_USERNAME` / `AIRFLOW_ADMIN_PASSWORD`) |
+| **MinIO Console** | http://localhost:9001 | `.env` (`MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`) |
+| **PostgreSQL** | localhost:5432 | `.env` (`POSTGRES_USER` / `POSTGRES_PASSWORD`) |
+
+---
+
+## Seguranca
+
+- Senhas geradas automaticamente com caracteres aleatorios
+- Chave Fernet do Airflow gerada criptograficamente
+- Portas publicadas apenas em `127.0.0.1` (localhost)
+- Arquivos `.env` nao versionados (gitignore)
+- Credenciais nao expostas no terminal durante setup
 
 ---
 

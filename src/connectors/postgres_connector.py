@@ -1,7 +1,9 @@
 import json
 import os
+import re
 import pandas as pd
 from sqlalchemy import text, create_engine
+from sqlalchemy.engine import URL
 from sqlalchemy.exc import SQLAlchemyError
 from dotenv import load_dotenv
 import logging
@@ -28,11 +30,15 @@ class PostgresConnector:
         self.engine = self._create_engine()
 
     def _create_engine(self):
-        conn_string = (
-            f"postgresql://{self.user}:{self.password}"
-            f"@{self.host}:{self.port}/{self.database}"
+        url = URL.create(
+            drivername="postgresql",
+            username=self.user,
+            password=self.password,
+            host=self.host,
+            port=self.port,
+            database=self.database,
         )
-        return create_engine(conn_string)
+        return create_engine(url)
 
     def write_dataframe(
         self,
@@ -84,7 +90,7 @@ class PostgresConnector:
         table_name: str,
         schema: str = "public"
     ) -> pd.DataFrame:
-        query = f"SELECT * FROM {schema}.{table_name}"
+        query = f'SELECT * FROM "{schema}"."{table_name}"'
         return pd.read_sql(query, self.engine)
 
     def execute_script(
@@ -156,10 +162,15 @@ def registrar_execucao(
 
     airflow = AirflowConnector()
     creds = airflow.get_connection('elt_schedule')
-    engine = create_engine(
-        f"postgresql://{creds['user']}:{creds['password']}"
-        f"@{creds['host']}:{creds['port']}/{creds['database']}"
+    url = URL.create(
+        drivername="postgresql",
+        username=creds['user'],
+        password=creds['password'],
+        host=creds['host'],
+        port=creds['port'],
+        database=creds['database'],
     )
+    engine = create_engine(url)
 
     fim = 'NOW()' if status in ('sucesso', 'erro') else 'NULL'
     with engine.begin() as conn:
