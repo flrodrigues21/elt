@@ -149,7 +149,7 @@ docker exec elt-airflow-webserver airflow connections test elt_gold
 ### Fluxo dos dados
 
 ```
-Fonte de dados (Google Sheets, CSV, FTP, etc.)
+Fonte de dados (Google Sheets, CSV, S3, API, etc.)
          │
          ▼
     ┌─────────┐

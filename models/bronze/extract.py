@@ -145,7 +145,7 @@ def extract_and_load(
                 extractor = extractor_class(config=config)
                 df = extractor.extract(row.to_dict())
 
-            elif type_source in ('FTP', 'FTP_DATASUS', 'S3', 'CKAN', 'CSV_URL', 'MINIO', 'XLSX'):
+            elif type_source in ('S3', 'CKAN', 'CSV_URL', 'MINIO', 'XLSX'):
                 extractor_class = get_extractor(type_source)
                 row_dict = row.to_dict()
                 config = _parse_config(row_dict)
@@ -153,10 +153,7 @@ def extract_and_load(
                 source_url = row.get('url', 'N/A')
                 logging.info(f"[BRONZE] Conectado a origem: {source_url}")
 
-                if type_source in ('FTP', 'FTP_DATASUS'):
-                    row_dict['config'] = config
-                    extractor = extractor_class(config)
-                elif type_source in ('S3', 'CKAN', 'CSV_URL'):
+                if type_source in ('S3', 'CKAN', 'CSV_URL'):
                     row_dict['config'] = config
                     extractor = extractor_class()
                 elif type_source == 'MINIO':

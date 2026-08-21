@@ -59,11 +59,9 @@ cd elt
             |                     |                      |
        GOOGLE SHEETS           DW query               DW query
        XLSX                    -> silver               -> gold
-       FTP / DATASUS
        S3 / CKAN / CSV_URL
-       Oracle
-       PostgreSQL
-       MinIO
+       Oracle / PostgreSQL
+       MinIO (parquet)
        API REST
 ```
 
@@ -327,7 +325,6 @@ Cada camada gera logs descritivos no Airflow:
 | `ORACLE` | Extracao de banco Oracle | `config.connection_airflow`, `schema_source`, `table_source` |
 | `POSTGRE` | Extracao de banco PostgreSQL | `config.connection_airflow`, `schema_source`, `table_source` |
 | `MINIO` | Arquivos Parquet/CSV do MinIO | `config.endpoint`, `config.bucket`, `config.object_name` |
-| `FTP` / `FTP_DATASUS` | Download de arquivos DBC/DBF | `config.theme`, `config.ano_mes`, `config.ufs` |
 | `S3` / `CKAN` / `CSV_URL` | Download de CSV/Parquet via URL | `url`, `config.delimiter`, `config.encoding` |
 | `API` | API REST generica | `config.connection_airflow`, `config.base_url`, `config.endpoint` |
 

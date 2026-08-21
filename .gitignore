@@ -9,8 +9,6 @@ utils/credentials.json
 data/
 downloads/
 *.parquet
-*.dbc
-*.dbf
 .venv
 ~$*
 .opencode/
