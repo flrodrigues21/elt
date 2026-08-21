@@ -19,9 +19,11 @@ function Write-Header($msg) {
 
 function New-SecureString($length) {
     $chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+'
+    $bytes = New-Object byte[] $length
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
     $s = ''
     for ($i = 0; $i -lt $length; $i++) {
-        $s += $chars[(Get-Random -Maximum $chars.Length)]
+        $s += $chars[$bytes[$i] % $chars.Length]
     }
     return $s
 }
