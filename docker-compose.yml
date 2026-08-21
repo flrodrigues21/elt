@@ -37,7 +37,7 @@ services:
       - ./__init__.py:/opt/airflow/elt/__init__.py
       - ./utils:/opt/airflow/elt/utils
     entrypoint: /bin/bash
-    command: ["-c", "airflow db migrate && bash /opt/airflow/init.sh && echo 'Init completo!'"]
+    command: ["-c", "until PGPASSWORD=$${POSTGRES_PASSWORD} psql -h elt-postgres -U $${POSTGRES_USER} -d postgres -c 'SELECT 1' >/dev/null 2>&1; do sleep 1; done && PGPASSWORD=$${POSTGRES_PASSWORD} psql -h elt-postgres -U $${POSTGRES_USER} -d postgres -tc \"SELECT 1 FROM pg_database WHERE datname='airflow'\" | grep -q 1 || PGPASSWORD=$${POSTGRES_PASSWORD} psql -h elt-postgres -U $${POSTGRES_USER} -d postgres -c 'CREATE DATABASE airflow;' && airflow db migrate && bash /opt/airflow/init.sh && echo 'Init completo!'"]
     depends_on:
       postgres:
         condition: service_healthy

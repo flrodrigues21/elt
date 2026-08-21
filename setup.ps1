@@ -18,9 +18,10 @@ function Write-Header($msg) {
 }
 
 function New-SecureString($length) {
-    $chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+'
+    $chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#^&*()-_=+'
     $bytes = New-Object byte[] $length
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $rng.GetBytes($bytes)
     $s = ''
     for ($i = 0; $i -lt $length; $i++) {
         $s += $chars[$bytes[$i] % $chars.Length]
@@ -30,7 +31,8 @@ function New-SecureString($length) {
 
 function New-FernetKey {
     $bytes = New-Object byte[] 32
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $rng.GetBytes($bytes)
     return [Convert]::ToBase64String($bytes)
 }
 
@@ -104,11 +106,13 @@ if (-not (Test-Path $envFile)) {
         $airflowPass = New-SecureString 20
         $fernetKey = New-FernetKey
 
-        $content = Get-Content $envFile -Raw
-        $content = $content -replace '(?m)^POSTGRES_PASSWORD=$', "POSTGRES_PASSWORD=$pgPass"
-        $content = $content -replace '(?m)^AIRFLOW_ADMIN_PASSWORD=$', "AIRFLOW_ADMIN_PASSWORD=$airflowPass"
-        $content = $content -replace '(?m)^AIRFLOW_FERNET_KEY=$', "AIRFLOW_FERNET_KEY=$fernetKey"
-        Set-Content $envFile -Value $content -NoNewline
+        $lines = Get-Content $envFile
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^POSTGRES_PASSWORD=')       { $lines[$i] = "POSTGRES_PASSWORD=$pgPass" }
+            elseif ($lines[$i] -match '^AIRFLOW_ADMIN_PASSWORD=') { $lines[$i] = "AIRFLOW_ADMIN_PASSWORD=$airflowPass" }
+            elseif ($lines[$i] -match '^AIRFLOW_FERNET_KEY=')     { $lines[$i] = "AIRFLOW_FERNET_KEY=$fernetKey" }
+        }
+        $lines | Set-Content $envFile
 
         Write-Host ".env criado em: $envFile" -ForegroundColor Green
         Write-Host "  POSTGRES_PASSWORD: gerado (24 caracteres)" -ForegroundColor DarkGray
@@ -124,7 +128,10 @@ if (-not (Test-Path $envFile)) {
 }
 
 Write-Header "Subindo PostgreSQL + Airflow + MinIO via Docker"
-docker compose up -d --build
+$ErrorActionPreferenceOld = $ErrorActionPreference
+$ErrorActionPreference = "SilentlyContinue"
+docker compose up -d --build postgres minio
+$ErrorActionPreference = $ErrorActionPreferenceOld
 
 Write-Header "Aguardando PostgreSQL ficar pronto"
 $maxRetries = 30
@@ -144,6 +151,12 @@ if ($retry -eq $maxRetries) {
     Write-Host "ERRO: PostgreSQL nao ficou pronto a tempo." -ForegroundColor Red
     exit 1
 }
+
+Write-Header "Subindo Airflow (init, webserver, scheduler)"
+$ErrorActionPreferenceOld = $ErrorActionPreference
+$ErrorActionPreference = "SilentlyContinue"
+docker compose up -d --no-build
+$ErrorActionPreference = $ErrorActionPreferenceOld
 
 Write-Header "Aguardando Airflow init completar"
 $maxRetries = 60
