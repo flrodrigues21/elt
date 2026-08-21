@@ -68,7 +68,7 @@ def extract_and_load(
     schema_default = os.getenv('BRONZE_SCHEMA', 'global')
 
     logging.info(
-        f'Conexao Realizada: {host}:{port} db={db} schema={schema_default}'
+        f'[BRONZE] Conectado a origem: {host}:{port} | banco={db} | schema={schema_default}'
     )
 
     resultados = {}
@@ -80,7 +80,7 @@ def extract_and_load(
         strategy = row.get('strategy_destiny') or 'truncate'
 
         logging.info(
-            f"Processando [{type_source}] -> {schema_destiny}.{table_destiny}"
+            f"[BRONZE] Processando [{type_source}] -> {schema_destiny}.{table_destiny}"
         )
 
         try:
@@ -94,6 +94,7 @@ def extract_and_load(
                         'status': 'erro', 'erro': 'query_source vazio'
                     }
                     continue
+                logging.info(f"[BRONZE] Executando query contra {database_source}.{row.get('schema_source')}")
                 df = pd.read_sql(query, postgres.engine)
 
             elif type_source in ('GOOGLE_SHEETS',):
@@ -109,6 +110,7 @@ def extract_and_load(
                     conn_id = os.getenv(
                         'GOOGLE_SHEETS_CONN_ID', 'google_sheets'
                     )
+                logging.info(f"[BRONZE] Conectado a origem Google Sheets: {url}")
                 extractor_class = get_extractor(type_source)
                 extractor = extractor_class(url, conn_id=conn_id)
                 df = extractor.extract(row.to_dict())
@@ -148,6 +150,9 @@ def extract_and_load(
                 row_dict = row.to_dict()
                 config = _parse_config(row_dict)
 
+                source_url = row.get('url', 'N/A')
+                logging.info(f"[BRONZE] Conectado a origem: {source_url}")
+
                 if type_source in ('FTP', 'FTP_DATASUS'):
                     row_dict['config'] = config
                     extractor = extractor_class(config)
@@ -177,7 +182,7 @@ def extract_and_load(
                 extractor = extractor_class(row_dict)
                 df = extractor.extract(row_dict)
 
-            logging.info(f"Extraidos {len(df)} registros para {table_destiny}")
+            logging.info(f"[BRONZE] Lido {len(df)} registros da origem")
 
             minio_config = config.get("minio")
             if minio_config:
@@ -192,7 +197,7 @@ def extract_and_load(
                     format=fmt,
                 )
                 logging.info(
-                    f"Upload MinIO concluido: {object_name} ({len(df)} registros)"
+                    f"[BRONZE] Enviado para MinIO: {object_name} ({len(df)} registros)"
                 )
             else:
                 chunksize = config.get('chunksize', 10000)
@@ -202,6 +207,9 @@ def extract_and_load(
                     schema=schema_destiny,
                     if_exists=strategy,
                     chunksize=chunksize,
+                )
+                logging.info(
+                    f"[BRONZE] Tabela {schema_destiny}.{table_destiny} criada/atualizada com {len(df)} registros"
                 )
 
             pos_query = row.get('pos_query')
@@ -230,6 +238,8 @@ def extract_and_load(
                 ds_fonte=row.get('url', ''),
                 trigger_type=trigger_type,
             )
+
+            logging.info(f"[BRONZE] Finalizado: {schema_destiny}.{table_destiny} ({len(df)} registros)")
 
         except Exception as e:
             erro_msg = str(e)

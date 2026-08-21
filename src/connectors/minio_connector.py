@@ -68,7 +68,7 @@ class MinioConnector:
     ) -> str:
         tmp_dir = os.getenv("TMPDIR", tempfile.gettempdir())
         ext = format.lower()
-        tmp_path = os.path.join(tmp_dir, object_name)
+        tmp_path = os.path.join(tmp_dir, os.path.basename(object_name))
 
         if ext == "parquet":
             df.to_parquet(tmp_path, index=False)
@@ -98,3 +98,30 @@ class MinioConnector:
             return True
         except S3Error:
             return False
+
+    def read_dataframe(
+        self,
+        object_name: str,
+        format: str = "parquet",
+    ) -> pd.DataFrame:
+        tmp_dir = os.getenv("TMPDIR", tempfile.gettempdir())
+        ext = format.lower()
+        tmp_path = os.path.join(tmp_dir, object_name.replace("/", "_"))
+
+        self.client.fget_object(self.bucket, object_name, tmp_path)
+
+        try:
+            if ext == "parquet":
+                df = pd.read_parquet(tmp_path)
+            elif ext == "csv":
+                df = pd.read_csv(tmp_path)
+            elif ext == "json":
+                df = pd.read_json(tmp_path)
+            else:
+                raise ValueError(f"Formato nao suportado para leitura: {format}")
+
+            logger.info(f"Lido {len(df)} registros de minio://{self.bucket}/{object_name}")
+            return df
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)

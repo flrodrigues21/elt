@@ -155,7 +155,7 @@ def registrar_execucao(
     from elt.src.connectors.airflow_connections import AirflowConnector
 
     airflow = AirflowConnector()
-    creds = airflow.get_connection('elt_gold')
+    creds = airflow.get_connection('elt_schedule')
     engine = create_engine(
         f"postgresql://{creds['user']}:{creds['password']}"
         f"@{creds['host']}:{creds['port']}/{creds['database']}"

@@ -36,7 +36,7 @@ def _get_trigger_type(**kwargs) -> str | None:
 
 
 def load_gold(projeto: str | None = None, **kwargs):
-    logging.info("Inicio da carga na camada gold")
+    logging.info("[GOLD] Inicio da carga na camada gold")
 
     trigger_type = _get_trigger_type(**kwargs)
     resultados = transform(
@@ -74,4 +74,4 @@ def load_gold(projeto: str | None = None, **kwargs):
     except Exception as e:
         logging.warning(f'Nao foi possivel registrar atualizacao: {e}')
 
-    logging.info("Carga gold finalizada com sucesso!")
+    logging.info("[GOLD] Carga gold finalizada com sucesso!")

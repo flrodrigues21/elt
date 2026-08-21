@@ -28,7 +28,7 @@ def connect_db(connection_id: str | None = None):
     return postgres, credentials
 
 
-def load_schedule_table(connection_id: str | None = 'elt_gold') -> pd.DataFrame:
+def load_schedule_table(connection_id: str | None = 'elt_schedule') -> pd.DataFrame:
     postgres, credentials = connect_db(connection_id)
     schema = credentials['schema'] or 'global'
     table = os.getenv('SCHEDULE_TABLE', 'schedule')

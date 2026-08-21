@@ -37,7 +37,7 @@ def _get_trigger_type(**kwargs) -> str | None:
 
 
 def load_bronze(projeto: str | None = None, **kwargs):
-    logging.info("Inicio da carga na camada bronze")
+    logging.info("[BRONZE] Inicio da carga na camada bronze")
 
     trigger_type = _get_trigger_type(**kwargs)
     resultados = extract_and_load(projeto=projeto, trigger_type=trigger_type)
@@ -57,7 +57,7 @@ def load_bronze(projeto: str | None = None, **kwargs):
     if erros:
         raise RuntimeError(f"Erros na camada bronze:\n" + "\n".join(erros))
 
-    logging.info("Carga bronze finalizada com sucesso!")
+    logging.info("[BRONZE] Carga bronze finalizada com sucesso!")
 
 
 def load_bronze_com_historico(

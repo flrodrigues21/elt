@@ -46,6 +46,7 @@ def _build_dag(dag_id: str, schedule: str, projeto: str | None = None):
         dag_id=dag_id,
         description=f"Pipeline ELT - {projeto or 'todos os projetos'}",
         default_args=default_args,
+        start_date=datetime(2024, 1, 1),
         schedule=schedule,
         catchup=False,
         max_active_runs=1,

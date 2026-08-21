@@ -2,10 +2,12 @@ import logging
 import os
 
 import pandas as pd
+from sqlalchemy import text
 from dotenv import load_dotenv
 
 from elt.src.schedule.schedule_table import load_schedule_table, get_steps
 from elt.src.connectors.postgres_connector import PostgresConnector, registrar_execucao
+from elt.src.connectors.minio_connector import MinioConnector
 from elt.src.connectors.airflow_connections import AirflowConnector
 
 load_dotenv()
@@ -29,6 +31,19 @@ def connect_db(connection_id: str):
     return postgres, credentials
 
 
+def _parse_config(row):
+    config = row.get('config')
+    if isinstance(config, str):
+        try:
+            import json
+            return json.loads(config)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    if isinstance(config, dict):
+        return config
+    return {}
+
+
 def transform(
     projeto: str | None = None,
     connection_origem_id: str | None = 'elt_silver',
@@ -46,42 +61,76 @@ def transform(
         logging.warning("Nenhum step de transformacao gold encontrado")
         return {}
 
-    postgres_origem, cred_origem = connect_db(connection_origem_id)
     postgres_destino, cred_destino = connect_db(connection_destino_id)
 
     schema_default = os.getenv('GOLD_SCHEMA', 'global')
 
     logging.info(
-        f'Transformacao gold: {cred_origem["host"]}:{cred_origem["port"]} '
-        f'-> {cred_destino["host"]}:{cred_destino["port"]} '
-        f'schema={schema_default}'
+        f'[GOLD] Destino: {cred_destino["host"]}:{cred_destino["port"]} '
+        f'banco={cred_destino["database"]} schema={schema_default}'
     )
 
     resultados = {}
+    postgres_origem = None
 
     for _, row in df_steps.iterrows():
         table_destiny = row['table_destiny']
         schema_destiny = row.get('schema_destiny') or schema_default
         strategy = row.get('strategy_destiny') or 'truncate'
         query = row.get('query_source')
-
-        if not query:
-            logging.error(f"query_source nao definida para {table_destiny}")
-            resultados[table_destiny] = {'status': 'erro', 'erro': 'query_source vazio'}
-            continue
+        config = _parse_config(row.to_dict())
+        minio_source_config = config.get("minio_source")
 
         try:
-            logging.info(f"Executando query para {table_destiny}")
-            df = pd.read_sql(query, postgres_origem.engine)
+            if minio_source_config:
+                minio_src = MinioConnector(minio_source_config)
+                fmt = minio_source_config.get("format", "parquet")
+                object_name = minio_source_config.get(
+                    "object_name", f"{table_destiny}.{fmt}"
+                )
+                logging.info(f"[GOLD] Lendo de MinIO: minio://{minio_src.bucket}/{object_name}")
+                df = minio_src.read_dataframe(object_name=object_name, format=fmt)
+                logging.info(f"[GOLD] Lido {len(df)} registros do MinIO")
+            else:
+                if not query:
+                    logging.error(f"query_source nao definida para {table_destiny}")
+                    resultados[table_destiny] = {'status': 'erro', 'erro': 'query_source vazio'}
+                    continue
 
-            logging.info(f"Transformados {len(df)} registros para {table_destiny}")
+                if postgres_origem is None:
+                    postgres_origem, cred_origem = connect_db(connection_origem_id)
+                    logging.info(
+                        f'[GOLD] Conectado a origem: {cred_origem["host"]}:{cred_origem["port"]} '
+                        f'banco={cred_origem["database"]}'
+                    )
 
-            postgres_destino.write_dataframe(
-                df=df,
-                table_name=table_destiny,
-                schema=schema_destiny,
-                if_exists=strategy
-            )
+                logging.info(f"[GOLD] Executando query para {table_destiny}")
+                df = pd.read_sql(text(query), postgres_origem.engine)
+                logging.info(f"[GOLD] Lido {len(df)} registros da origem")
+
+            minio_sink_config = config.get("minio")
+            if minio_sink_config:
+                minio_conn = MinioConnector(minio_sink_config)
+                fmt = minio_sink_config.get("format", "parquet")
+                object_name = minio_sink_config.get(
+                    "object_name", f"{table_destiny}.{fmt}"
+                )
+                minio_conn.upload_dataframe(
+                    df=df,
+                    object_name=object_name,
+                    format=fmt,
+                )
+                logging.info(
+                    f"[GOLD] Enviado para MinIO: {object_name} ({len(df)} registros)"
+                )
+            else:
+                postgres_destino.write_dataframe(
+                    df=df,
+                    table_name=table_destiny,
+                    schema=schema_destiny,
+                    if_exists=strategy
+                )
+                logging.info(f"[GOLD] Tabela {schema_destiny}.{table_destiny} criada/atualizada com {len(df)} registros")
 
             pos_query = row.get('pos_query')
             if pos_query:
@@ -105,9 +154,11 @@ def transform(
                 status='sucesso',
                 registros=len(df),
                 layer='gold',
-                type_source='DW',
+                type_source='MINIO' if minio_source_config else 'DW',
                 trigger_type=trigger_type,
             )
+
+            logging.info(f"[GOLD] Finalizado: {schema_destiny}.{table_destiny} ({len(df)} registros)")
 
         except Exception as e:
             erro_msg = str(e)
@@ -128,7 +179,7 @@ def transform(
                 status='erro',
                 erro=erro_msg,
                 layer='gold',
-                type_source='DW',
+                type_source='MINIO' if minio_source_config else 'DW',
                 trigger_type=trigger_type,
             )
 

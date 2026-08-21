@@ -13,3 +13,4 @@ downloads/
 *.dbf
 .venv
 ~$*
+.opencode/

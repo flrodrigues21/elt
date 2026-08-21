@@ -21,7 +21,7 @@ def _get_trigger_type(**kwargs) -> str | None:
 
 
 def load_silver(projeto: str | None = None, **kwargs):
-    logging.info("Inicio da carga na camada silver")
+    logging.info("[SILVER] Inicio da carga na camada silver")
 
     trigger_type = _get_trigger_type(**kwargs)
     resultados = transform(
@@ -59,7 +59,7 @@ def load_silver(projeto: str | None = None, **kwargs):
     except Exception as e:
         logging.warning(f'Nao foi possivel registrar atualizacao: {e}')
 
-    logging.info("Carga silver finalizada com sucesso!")
+    logging.info("[SILVER] Carga silver finalizada com sucesso!")
 
 
 def connect_prata():
