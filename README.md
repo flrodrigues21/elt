@@ -35,7 +35,29 @@ cd elt
 | MinIO Console | `minio/minio:RELEASE.2024-09-22T00-33-43Z` | `127.0.0.1:9001` | Interface web MinIO |
 
 > **Portas:** Todas as portas sao publicadas apenas em `127.0.0.1` por seguranca.
-> Para acesso remoto, altere no `docker-compose.yml` para `0.0.0.0:PORTA:PORTA`.
+> **Atencao:** Alterar para `0.0.0.0` expoe os servicos a rede local/externa.
+> Ao fazer isso, garanta: (1) firewall com whitelist de IPs, (2) credenciais fortes,
+> (3) TLS/proxy reverso na frente, e (4) redes Docker dedicadas.
+
+---
+
+## O que e cada componente
+
+| Componente | Papel no projeto |
+|-----------|-----------------|
+| **Python 3.12** | Linguagem dos extractors, conectores e controller |
+| **PostgreSQL 16** | Banco relacional para todas as camadas (bronze/silver/gold/elt/airflow) |
+| **Apache Airflow 2.9.3** | Orquestrador de DAGs: executa, agenda e monitora pipelines ELT |
+| **Docker / Docker Compose** | Empacota e orquestra todos os servicos com um unico comando |
+| **MinIO** | Object storage S3-compativel para datalake em formato Parquet |
+| **MinIO SDK (minio-py)** | Cliente Python para upload/download de objetos no MinIO |
+| **SQLAlchemy** | Conexao com PostgreSQL/Oracle via pool de conexoes |
+| **pandas / PyArrow** | Manipulacao de dados e suporte a Parquet |
+| **OpenPyXL** | Leitura/escrita de arquivos Excel (.xlsx) |
+| **Requests** | HTTP client para APIs REST e downloads de CSV |
+| **psycopg2** | Adaptador nativo PostgreSQL para Python |
+| **python-oracledb** | Driver Oracle (modo Thin, sem Oracle Client) |
+| **Google Sheets APIs** | Extractor para planilhas Google Sheets via service account |
 
 ---
 
@@ -342,6 +364,20 @@ minuto hora dia_do_mes mes dia_da_semana
 | `0 */2 * * *` | A cada 2 horas |
 
 > Para testar expressoes cron: [https://crontab.guru](https://crontab.guru)
+
+## Gerenciamento de Dependencias
+
+- **Imagens Docker:** Todas fixadas com tag de versao (nao `:latest`)
+- **Python (requirements-airflow.txt):** Versoes especificadas sem upper bound para
+  permitir resolucao pelo constraint do Airflow 2.9.3
+- **Airflow constraints:** O Airflow resolve dependencias usando constraints oficiais
+  da versao 2.9.3, garantindo compatibilidade entre providers e SDKs
+- **Dependabot:** Configurado em `.github/dependabot.yml` para monitorar atualizacoes
+  semanais de pip e Docker
+- **Security:** `src/extractors/_security.py` fornece protecao contra path traversal,
+  SSRF, DNS rebinding e limits de download
+
+---
 
 ## Licenca
 

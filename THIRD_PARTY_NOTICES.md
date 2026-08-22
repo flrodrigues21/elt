@@ -24,9 +24,11 @@ in accordance with the respective licenses.
 - **Usage:** S3-compatible object storage for parquet data lake
 - **Image:** `minio/minio:RELEASE.2024-09-22T00-33-43Z`
 
-> **Note:** MinIO uses AGPL-3.0. If you modify MinIO source code, you must release
-> those modifications under AGPL-3.0. Using MinIO as a service (without modification)
-> does not trigger this obligation.
+> **Note:** MinIO uses AGPL-3.0. If you distribute or make available over a network
+> a modified version of MinIO, you must provide the corresponding source code under
+> AGPL-3.0. Running unmodified MinIO as an internal service (without distributing
+> the MinIO binaries or modified source) does **not** trigger this obligation.
+> This project does not modify MinIO; it is used as a stock Docker image only.
 
 ## Python Dependencies (requirements-airflow.txt)
 
