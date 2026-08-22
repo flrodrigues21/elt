@@ -22,12 +22,16 @@ import io
 import logging
 import os
 import tempfile
-import zipfile
-from typing import Optional
 
 import pandas as pd
-import requests
 
+from elt.src.extractors._security import (
+    SecurityError,
+    create_safe_tempdir,
+    safe_zip_extract,
+    stream_download,
+    validate_url,
+)
 from elt.src.extractors.base import BaseExtractor
 
 logger = logging.getLogger(__name__)
@@ -44,24 +48,29 @@ class S3Extractor(BaseExtractor):
         if not url:
             raise ValueError("URL nao definida para extracao S3")
 
+        validate_url(url)
+
         delimiter = config.get("delimiter", ";")
         encoding = config.get("encoding", "latin-1")
         compression = config.get("compression", None)
         header_row = config.get("header_row", 0)
+        max_bytes = config.get("max_download_bytes", 2 * 1024 * 1024 * 1024)
 
         logger.info(f"Baixando de {url}...")
-        resp = requests.get(url, timeout=300)
-        resp.raise_for_status()
+        resp_bytes = stream_download(url, max_bytes=max_bytes)
 
         if compression == "zip" or url.endswith(".zip"):
-            zip_path = os.path.join(tempfile.gettempdir(), "download.zip")
-            with open(zip_path, "wb") as f:
-                f.write(resp.content)
-            with zipfile.ZipFile(zip_path, "r") as z:
-                csv_name = [n for n in z.namelist() if n.endswith(".csv")][0]
-                with z.open(csv_name) as f:
-                    raw = f.read().decode(encoding)
-            os.remove(zip_path)
+            tmp_dir = create_safe_tempdir()
+            extracted_files = safe_zip_extract(resp_bytes, tmp_dir)
+            csv_files = [f for f in extracted_files if f.endswith(".csv")]
+            if not csv_files:
+                raise ValueError("ZIP nao contem arquivos .csv")
+            csv_path = csv_files[0]
+            with open(csv_path, encoding=encoding) as f:
+                raw = f.read()
+            for f in extracted_files:
+                os.remove(f)
+            os.rmdir(tmp_dir)
 
             reader = csv.reader(io.StringIO(raw), delimiter=delimiter)
             header = [c.strip().strip('"').strip() for c in next(reader)]
@@ -69,7 +78,7 @@ class S3Extractor(BaseExtractor):
             df = pd.DataFrame(rows, columns=header)
 
         elif url.endswith(".csv"):
-            raw = resp.content.decode(encoding)
+            raw = resp_bytes.decode(encoding)
             reader = csv.reader(io.StringIO(raw), delimiter=delimiter)
             header = [c.strip().strip('"').strip() for c in next(reader)]
             rows = list(reader)
@@ -78,12 +87,12 @@ class S3Extractor(BaseExtractor):
         elif url.endswith(".parquet"):
             tmp = os.path.join(tempfile.gettempdir(), "download.parquet")
             with open(tmp, "wb") as f:
-                f.write(resp.content)
+                f.write(resp_bytes)
             df = pd.read_parquet(tmp)
             os.remove(tmp)
 
         else:
-            raw = resp.content.decode(encoding)
+            raw = resp_bytes.decode(encoding)
             reader = csv.reader(io.StringIO(raw), delimiter=delimiter)
             header = [c.strip().strip('"').strip() for c in next(reader)]
             rows = list(reader)

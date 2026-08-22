@@ -6,6 +6,14 @@ import pandas as pd
 import requests
 
 from elt.src.connectors.airflow_connections import AirflowConnector
+from elt.src.extractors._security import (
+    SecurityError,
+    create_safe_tempdir,
+    is_safe_path,
+    sanitize_filename,
+    stream_download,
+    validate_url,
+)
 from elt.src.extractors.base import BaseExtractor
 
 logger = logging.getLogger(__name__)
@@ -39,6 +47,7 @@ class ApiExtractor(BaseExtractor):
 
     def _authenticate_token(self) -> str:
         url = self._build_url(self.login_endpoint)
+        validate_url(url)
         user, password = self._get_credentials()
 
         body = self.login_body or {"user": user, "pass": password}
@@ -75,6 +84,7 @@ class ApiExtractor(BaseExtractor):
 
     def extract(self, row: dict) -> pd.DataFrame:
         url = self._build_url()
+        validate_url(url)
 
         headers = {"Accept": "application/json"}
         headers.update(self.extra_headers)
@@ -160,13 +170,26 @@ class ApiExtractor(BaseExtractor):
             elif "filename*" in content_disposition:
                 filename = content_disposition.split("filename*=")[-1].strip('"')
 
-            tmp_dir = os.getenv("TMPDIR", tempfile.gettempdir())
-            tmp_path = os.path.join(tmp_dir, filename or "download.bin")
+            safe_name = sanitize_filename(filename or "download.bin")
+            tmp_dir = create_safe_tempdir()
+            tmp_path = os.path.join(tmp_dir, safe_name)
+
+            if not is_safe_path(tmp_dir, tmp_path):
+                raise SecurityError(
+                    f"Resolved path escapes temp directory: {tmp_path}"
+                )
+
+            max_bytes = self.config.get("max_download_bytes", 2 * 1024 * 1024 * 1024)
+            content = stream_download(url, max_bytes=max_bytes)
 
             with open(tmp_path, "wb") as f:
-                f.write(response.content)
+                f.write(content)
 
             logger.info(f"Arquivo salvo temporariamente: {tmp_path}")
-            return pd.DataFrame([{"file_path": tmp_path, "filename": filename or "download.bin"}])
+            return pd.DataFrame(
+                [{"file_path": tmp_path, "filename": safe_name}]
+            )
 
-        return pd.DataFrame([{"raw_content": response.content, "status_code": response.status_code}])
+        return pd.DataFrame(
+            [{"raw_content": response.content, "status_code": response.status_code}]
+        )

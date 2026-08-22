@@ -26,9 +26,16 @@ from typing import Optional
 
 import pandas as pd
 
+from elt.src.extractors._security import (
+    SecurityError,
+    create_safe_tempdir,
+    is_safe_path,
+)
 from elt.src.extractors.base import BaseExtractor
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_MAX_FTP_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB
 
 
 class FTPExtractor(BaseExtractor):
@@ -82,9 +89,28 @@ class FTPExtractor(BaseExtractor):
 
     def _download(self, ftp: ftplib.FTP, filename: str) -> str:
         remote = f"{self.base_path}/{filename}"
-        tmp = os.path.join(tempfile.gettempdir(), filename)
+        tmp = os.path.join(create_safe_tempdir(), os.path.basename(filename))
+
+        if not is_safe_path(os.path.dirname(tmp), tmp):
+            raise SecurityError(
+                f"Download path escapes temp directory: {filename}"
+            )
+
+        total_bytes = 0
+        max_bytes = DEFAULT_MAX_FTP_BYTES
+
+        def _write_with_limit(data):
+            nonlocal total_bytes
+            total_bytes += len(data)
+            if total_bytes > max_bytes:
+                raise SecurityError(
+                    f"FTP download exceeded size limit ({max_bytes} bytes)"
+                )
+            f.write(data)
+
         with open(tmp, "wb") as f:
-            ftp.retrbinary(f"RETR {remote}", f.write)
+            ftp.retrbinary(f"RETR {remote}", _write_with_limit)
+
         return tmp
 
     def _read_file(self, path: str) -> pd.DataFrame:
