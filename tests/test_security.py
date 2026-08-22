@@ -279,7 +279,7 @@ class TestSafeZipExtract:
     def test_bomb_file_count(self):
         data = self._make_zip({f"f{i}.csv": "d" for i in range(100)})
         with tempfile.TemporaryDirectory() as d:
-            with pytest.raises(SecurityError, match="more than"):
+            with pytest.raises(SecurityError, match="100 files"):
                 safe_zip_extract(data, d, max_files=5)
 
     def test_collision_naming(self):
@@ -314,7 +314,7 @@ class TestSafeRequest:
         mock_resp = MagicMock()
         mock_resp.is_redirect = False
         mock_resp.status_code = 200
-        with patch("elt.src.extractors._security.requests.request", return_value=mock_resp) as m:
+        with patch.object(_security.requests, "request", return_value=mock_resp) as m:
             resp = safe_request("GET", "https://example.com")
             m.assert_called_once()
             assert resp is mock_resp
@@ -325,8 +325,8 @@ class TestSafeRequest:
         r1.headers = {"Location": "http://127.0.0.1/secret"}
         r1.close = MagicMock()
 
-        with patch("elt.src.extractors._security.validate_url", side_effect=SecurityError("blocked")):
-            with patch("elt.src.extractors._security.requests.request", return_value=r1):
+        with patch.object(_security, "validate_url", side_effect=SecurityError("blocked")):
+            with patch.object(_security.requests, "request", return_value=r1):
                 with pytest.raises(SecurityError, match="blocked"):
                     safe_request("GET", "https://example.com")
 
@@ -340,7 +340,7 @@ class TestSafeRequest:
         r2.is_redirect = False
         r2.status_code = 200
 
-        with patch("elt.src.extractors._security.requests.request", side_effect=[r1, r2]):
+        with patch.object(_security.requests, "request", side_effect=[r1, r2]):
             resp = safe_request("GET", "https://example.com")
             assert resp is r2
 
@@ -350,7 +350,7 @@ class TestSafeRequest:
         r.headers = {"Location": "https://example.com/loop"}
         r.close = MagicMock()
 
-        with patch("elt.src.extractors._security.requests.request", return_value=r):
+        with patch.object(_security.requests, "request", return_value=r):
             with pytest.raises(SecurityError, match="Too many redirects"):
                 safe_request("GET", "https://example.com", max_redirects=2)
 
@@ -360,16 +360,17 @@ class TestSafeRequest:
         r1.headers = {"Location": "https://other.com/x"}
         r1.close = MagicMock()
 
-        with patch("elt.src.extractors._security.validate_url"):
-            with patch(
-                "elt.src.extractors._security.resolve_and_check_host",
-                return_value=["1.2.3.4"],
-            ):
-                with pytest.raises(SecurityError, match="DNS rebinding"):
-                    safe_request(
-                        "GET", "https://example.com",
-                        resolved_ips=["5.6.7.8"],
-                    )
+        with patch.object(_security.requests, "request", return_value=r1):
+            with patch.object(_security, "validate_url"):
+                with patch.object(
+                    _security, "resolve_and_check_host",
+                    return_value=["1.2.3.4"],
+                ):
+                    with pytest.raises(SecurityError, match="DNS rebinding"):
+                        safe_request(
+                            "GET", "https://example.com",
+                            resolved_ips=["5.6.7.8"],
+                        )
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +399,7 @@ class TestStreamDownloadToFile:
         with patch("socket.getaddrinfo", return_value=[
             (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0)),
         ]):
-            with patch("elt.src.extractors._security.requests.request", return_value=mock_resp):
+            with patch.object(_security.requests, "request", return_value=mock_resp):
                 path = stream_download_to_file("https://example.com/data.csv")
                 try:
                     assert os.path.exists(path)
@@ -416,7 +417,7 @@ class TestStreamDownloadToFile:
         with patch("socket.getaddrinfo", return_value=[
             (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0)),
         ]):
-            with patch("elt.src.extractors._security.requests.request", return_value=mock_resp):
+            with patch.object(_security.requests, "request", return_value=mock_resp):
                 with pytest.raises(SecurityError, match="Content-Length"):
                     stream_download_to_file("https://example.com/big.bin", max_bytes=1000)
 
@@ -430,7 +431,7 @@ class TestStreamDownloadToFile:
         with patch("socket.getaddrinfo", return_value=[
             (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0)),
         ]):
-            with patch("elt.src.extractors._security.requests.request", return_value=mock_resp):
+            with patch.object(_security.requests, "request", return_value=mock_resp):
                 with pytest.raises(IOError):
                     stream_download_to_file("https://example.com/fail.csv")
 
