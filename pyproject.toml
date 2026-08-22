@@ -5,7 +5,6 @@ description = "Framework generico de ELT com tabela de controle"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "dotenv>=0.9.9",
     "google-auth>=2.50.0",
     "google-api-python-client>=2.130.0",
     "gspread>=6.2.1",
