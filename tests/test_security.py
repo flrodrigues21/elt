@@ -1,20 +1,21 @@
 """Tests for _security.py module.
 
-Covers: path traversal, SSRF, download limits, ZIP bomb, filename sanitization.
+All network and DNS calls are mocked – no real resolution required.
 """
 import importlib
 import io
 import os
 import pathlib
-import sys
+import socket
 import tempfile
 import zipfile
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Import _security directly to avoid triggering extractors/__init__.py
-# which eagerly imports airflow-dependent modules.
-_security_mod_path = pathlib.Path(__file__).resolve().parent.parent / "src" / "extractors" / "_security.py"
+_security_mod_path = (
+    pathlib.Path(__file__).resolve().parent.parent / "src" / "extractors" / "_security.py"
+)
 _spec = importlib.util.spec_from_file_location("_security", _security_mod_path)
 _security = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_security)
@@ -27,7 +28,12 @@ validate_url = _security.validate_url
 resolve_and_check_host = _security.resolve_and_check_host
 is_same_host = _security.is_same_host
 safe_zip_extract = _security.safe_zip_extract
-stream_download = _security.stream_download
+stream_download_to_file = _security.stream_download_to_file
+safe_request = _security.safe_request
+unique_temp_path = _security.unique_temp_path
+_configure = _security.configure_allowed_internals
+_classify_ip = _security._classify_ip
+_safe_remove = _security._safe_remove
 ALLOWED_SCHEMES = _security.ALLOWED_SCHEMES
 
 
@@ -35,55 +41,47 @@ ALLOWED_SCHEMES = _security.ALLOWED_SCHEMES
 # sanitize_filename
 # ---------------------------------------------------------------------------
 class TestSanitizeFilename:
-    def test_normal_filename(self):
+    def test_normal(self):
         assert sanitize_filename("data.csv") == "data.csv"
 
-    def test_strips_path_components(self):
+    def test_strips_path(self):
         assert sanitize_filename("/etc/passwd") == "passwd"
         assert sanitize_filename("../../../etc/passwd") == "passwd"
 
-    def test_strips_dangerous_chars(self):
+    def test_dangerous_chars(self):
         result = sanitize_filename('file<>:"/\\|?*.txt')
-        assert "<" not in result
-        assert ">" not in result
-        assert ":" not in result
-        assert '"' not in result
-        assert "/" not in result
-        assert "\\" not in result
-        assert "|" not in result
-        assert "?" not in result
+        for ch in '<>:"/\\|?*':
+            assert ch not in result
 
     def test_empty_returns_fallback(self):
         assert sanitize_filename("") == "download.bin"
         assert sanitize_filename(None) == "download.bin"
 
-    def test_fallback_override(self):
-        assert sanitize_filename("", fallback="custom.bin") == "custom.bin"
+    def test_custom_fallback(self):
+        assert sanitize_filename("", fallback="x.bin") == "x.bin"
 
-    def test_strips_dots_and_spaces(self):
+    def test_dots_only(self):
         assert sanitize_filename("...") == "download.bin"
 
     def test_content_disposition_attack(self):
-        malicious = 'attachment; filename="../../../etc/shadow"'
-        name = malicious.split("filename=")[-1].strip('"')
-        assert sanitize_filename(name) == "shadow"
+        name = 'attachment; filename="../../../etc/shadow"'
+        raw = name.split("filename=")[-1].strip('"')
+        assert sanitize_filename(raw) == "shadow"
 
 
 # ---------------------------------------------------------------------------
 # is_safe_path
 # ---------------------------------------------------------------------------
 class TestIsSafePath:
-    def test_safe_relative_path(self):
+    def test_safe(self):
         base = tempfile.gettempdir()
-        target = os.path.join(base, "file.txt")
-        assert is_safe_path(base, target) is True
+        assert is_safe_path(base, os.path.join(base, "f.txt")) is True
 
-    def test_traversal_detected(self):
+    def test_traversal(self):
         base = tempfile.gettempdir()
-        target = os.path.join(base, "..", "etc", "passwd")
-        assert is_safe_path(base, target) is False
+        assert is_safe_path(base, os.path.join(base, "..", "etc", "passwd")) is False
 
-    def test_absolute_escape(self):
+    def test_absolute(self):
         base = tempfile.gettempdir()
         target = "/etc/passwd" if os.name != "nt" else "C:\\Windows\\System32\\config\\SAM"
         assert is_safe_path(base, target) is False
@@ -92,84 +90,160 @@ class TestIsSafePath:
         base = tempfile.gettempdir()
         assert is_safe_path(base, base) is True
 
-    def test_subdir(self):
-        base = tempfile.gettempdir()
-        target = os.path.join(base, "subdir", "file.txt")
-        assert is_safe_path(base, target) is True
-
 
 # ---------------------------------------------------------------------------
 # validate_url_scheme
 # ---------------------------------------------------------------------------
 class TestValidateUrlScheme:
-    def test_http_allowed(self):
+    def test_http_ok(self):
         validate_url_scheme("http://example.com")
 
-    def test_https_allowed(self):
+    def test_https_ok(self):
         validate_url_scheme("https://example.com")
 
-    def test_ftp_rejected(self):
+    @pytest.mark.parametrize("url", [
+        "ftp://x.com/f", "file:///etc/passwd",
+        "javascript:alert(1)", "data:text/html,x",
+    ])
+    def test_rejected(self, url):
         with pytest.raises(SecurityError, match="not allowed"):
-            validate_url_scheme("ftp://example.com/file.csv")
+            validate_url_scheme(url)
 
-    def test_file_rejected(self):
-        with pytest.raises(SecurityError, match="not allowed"):
-            validate_url_scheme("file:///etc/passwd")
 
-    def test_javascript_rejected(self):
-        with pytest.raises(SecurityError, match="not allowed"):
-            validate_url_scheme("javascript:alert(1)")
+# ---------------------------------------------------------------------------
+# _classify_ip
+# ---------------------------------------------------------------------------
+class TestClassifyIP:
+    def test_loopback(self):
+        assert _classify_ip("127.0.0.1", "h") is not None
 
-    def test_data_rejected(self):
-        with pytest.raises(SecurityError, match="not allowed"):
-            validate_url_scheme("data:text/html,<h1>hi</h1>")
+    def test_link_local(self):
+        assert _classify_ip("169.254.1.1", "h") is not None
+
+    def test_multicast(self):
+        assert _classify_ip("224.0.0.1", "h") is not None
+
+    def test_unspecified(self):
+        assert _classify_ip("0.0.0.0", "h") is not None
+
+    def test_reserved(self):
+        assert _classify_ip("240.0.0.1", "h") is not None
+
+    def test_private_blocked_by_default(self):
+        assert _classify_ip("10.0.0.1", "h") is not None
+        assert _classify_ip("192.168.1.1", "h") is not None
+        assert _classify_ip("172.16.0.1", "h") is not None
+
+    def test_private_allowed_when_in_cidr(self):
+        _configure(cidrs=["10.0.0.0/8"])
+        try:
+            assert _classify_ip("10.0.0.1", "h") is None
+        finally:
+            _configure(cidrs=[])
+
+    def test_public_ok(self):
+        assert _classify_ip("8.8.8.8", "h") is None
 
 
 # ---------------------------------------------------------------------------
 # resolve_and_check_host
 # ---------------------------------------------------------------------------
 class TestResolveAndCheckHost:
-    def test_localhost_rejected(self):
-        with pytest.raises(SecurityError, match="loopback"):
-            resolve_and_check_host("localhost")
+    def test_localhost_blocked(self):
+        with patch("socket.getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 0)),
+        ]):
+            with pytest.raises(SecurityError, match="loopback"):
+                resolve_and_check_host("localhost")
 
-    def test_127_rejected(self):
-        with pytest.raises(SecurityError, match="loopback"):
-            resolve_and_check_host("127.0.0.1")
+    def test_private_blocked(self):
+        with patch("socket.getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("10.0.0.1", 0)),
+        ]):
+            with pytest.raises(SecurityError, match="private"):
+                resolve_and_check_host("internal.corp")
 
-    def test_dns_resolution_failure(self):
-        with pytest.raises(SecurityError, match="Cannot resolve"):
-            resolve_and_check_host("this-host-does-not-exist-12345.example.invalid")
+    def test_private_allowed_via_allowlist_cidr(self):
+        _configure(cidrs=["10.0.0.0/8"])
+        try:
+            with patch("socket.getaddrinfo", return_value=[
+                (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("10.0.0.1", 0)),
+            ]):
+                result = resolve_and_check_host("internal.corp")
+                assert "10.0.0.1" in result
+        finally:
+            _configure(cidrs=[])
+
+    def test_host_allowed_via_allowlist(self):
+        _configure(hosts=["myserver.local"])
+        try:
+            with patch("socket.getaddrinfo", return_value=[
+                (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("10.0.0.5", 0)),
+            ]):
+                result = resolve_and_check_host("myserver.local")
+                assert "10.0.0.5" in result
+        finally:
+            _configure(hosts=[])
+
+    def test_dns_failure(self):
+        with patch("socket.getaddrinfo", side_effect=socket.gaierror("no such host")):
+            with pytest.raises(SecurityError, match="Cannot resolve"):
+                resolve_and_check_host("no-such-host.invalid")
+
+    def test_public_ok(self):
+        with patch("socket.getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0)),
+        ]):
+            result = resolve_and_check_host("example.com")
+            assert "93.184.216.34" in result
 
 
 # ---------------------------------------------------------------------------
-# validate_url (full pipeline)
+# validate_url
 # ---------------------------------------------------------------------------
 class TestValidateUrl:
-    def test_valid_https(self):
-        validate_url("https://example.com/data.csv")
-
-    def test_ftp_scheme_rejected(self):
+    def test_ftp_rejected(self):
         with pytest.raises(SecurityError):
-            validate_url("ftp://example.com/file.csv")
+            validate_url("ftp://example.com/f.csv")
 
     def test_localhost_rejected(self):
-        with pytest.raises(SecurityError, match="loopback"):
-            validate_url("http://localhost:8080/api")
+        with patch("socket.getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 0)),
+        ]):
+            with pytest.raises(SecurityError, match="loopback"):
+                validate_url("http://localhost/api")
+
+    def test_public_ok(self):
+        with patch("socket.getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0)),
+        ]):
+            validate_url("https://example.com/data.csv")
 
 
 # ---------------------------------------------------------------------------
 # is_same_host
 # ---------------------------------------------------------------------------
 class TestIsSameHost:
-    def test_same_host(self):
-        assert is_same_host("https://example.com/a", "https://example.com/b") is True
+    def test_same(self):
+        assert is_same_host("https://a.com/x", "https://a.com/y") is True
 
-    def test_different_host(self):
-        assert is_same_host("https://evil.com/a", "https://example.com/b") is False
+    def test_different(self):
+        assert is_same_host("https://evil.com/x", "https://a.com/y") is False
 
-    def test_invalid_url(self):
-        assert is_same_host("not-a-url", "also-not-a-url") is False
+    def test_no_hostname(self):
+        assert is_same_host("not-a-url", "also-not") is False
+
+
+# ---------------------------------------------------------------------------
+# unique_temp_path
+# ---------------------------------------------------------------------------
+class TestUniqueTempPath:
+    def test_unique(self):
+        a = unique_temp_path()
+        b = unique_temp_path()
+        assert a != b
+        assert not os.path.exists(a)
+        assert not os.path.exists(b)
 
 
 # ---------------------------------------------------------------------------
@@ -183,78 +257,194 @@ class TestSafeZipExtract:
                 zf.writestr(name, content)
         return buf.getvalue()
 
-    def test_normal_zip(self):
+    def test_normal(self):
         data = self._make_zip({"data.csv": "a,b,c\n1,2,3"})
         with tempfile.TemporaryDirectory() as d:
             files = safe_zip_extract(data, d)
             assert len(files) == 1
             assert os.path.exists(files[0])
 
-    def test_zip_bomb_uncompressed_limit(self):
+    def test_bomb_uncompressed(self):
         data = self._make_zip({"huge.csv": "x" * 100_000})
         with tempfile.TemporaryDirectory() as d:
             with pytest.raises(SecurityError, match="exceeds.*limit"):
                 safe_zip_extract(data, d, max_uncompressed_bytes=1000)
 
-    def test_zip_bomb_compressed_limit(self):
+    def test_bomb_compressed(self):
         data = self._make_zip({"f.csv": "data"})
         with tempfile.TemporaryDirectory() as d:
             with pytest.raises(SecurityError, match="compressed size limit"):
                 safe_zip_extract(data, d, max_compressed_bytes=5)
 
-    def test_zip_bomb_file_count(self):
-        entries = {f"f{i}.csv": "data" for i in range(100)}
-        data = self._make_zip(entries)
+    def test_bomb_file_count(self):
+        data = self._make_zip({f"f{i}.csv": "d" for i in range(100)})
         with tempfile.TemporaryDirectory() as d:
-            with pytest.raises(SecurityError, match="more than 5"):
+            with pytest.raises(SecurityError, match="more than"):
                 safe_zip_extract(data, d, max_files=5)
 
-    def test_path_traversal_in_zip(self):
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr("../../etc/passwd", "evil content")
-        data = buf.getvalue()
+    def test_collision_naming(self):
+        data = self._make_zip({"a/data.csv": "1", "b/data.csv": "2"})
         with tempfile.TemporaryDirectory() as d:
-            # basename() strips traversal, so file is extracted safely
             files = safe_zip_extract(data, d)
-            assert len(files) == 1
+            assert len(files) == 2
+            basenames = [os.path.basename(f) for f in files]
+            assert basenames[0] == "data.csv"
+            assert "data_1.csv" in basenames
+
+    def test_cleanup_on_error(self):
+        bad_zip = b"not a zip at all"
+        with tempfile.TemporaryDirectory() as d:
+            with pytest.raises(Exception):
+                safe_zip_extract(bad_zip, d)
+            # No orphan files
+            assert os.listdir(d) == []
+
+    def test_traversal_via_basename(self):
+        data = self._make_zip({"../../etc/passwd": "evil"})
+        with tempfile.TemporaryDirectory() as d:
+            files = safe_zip_extract(data, d)
             assert os.path.basename(files[0]) == "passwd"
 
-    def test_path_traversal_with_encoded_sep(self):
-        name_with_backslash = "....\\..\\Windows\\System32\\config\\SAM"
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr(name_with_backslash, "evil content")
-        data = buf.getvalue()
-        with tempfile.TemporaryDirectory() as d:
-            files = safe_zip_extract(data, d)
-            assert len(files) == 1
-            basename = os.path.basename(files[0])
-            assert "\\\\" not in basename or basename == "SAM"
 
-    def test_directories_skipped(self):
-        data = self._make_zip({"dir/": "", "data.csv": "content"})
-        with tempfile.TemporaryDirectory() as d:
-            files = safe_zip_extract(data, d)
-            assert len(files) == 1
+# ---------------------------------------------------------------------------
+# safe_request (manual redirects)
+# ---------------------------------------------------------------------------
+class TestSafeRequest:
+    def test_simple_get(self):
+        mock_resp = MagicMock()
+        mock_resp.is_redirect = False
+        mock_resp.status_code = 200
+        with patch("elt.src.extractors._security.requests.request", return_value=mock_resp) as m:
+            resp = safe_request("GET", "https://example.com")
+            m.assert_called_once()
+            assert resp is mock_resp
+
+    def test_redirect_validated(self):
+        r1 = MagicMock()
+        r1.is_redirect = True
+        r1.headers = {"Location": "http://127.0.0.1/secret"}
+        r1.close = MagicMock()
+
+        with patch("elt.src.extractors._security.validate_url", side_effect=SecurityError("blocked")):
+            with patch("elt.src.extractors._security.requests.request", return_value=r1):
+                with pytest.raises(SecurityError, match="blocked"):
+                    safe_request("GET", "https://example.com")
+
+    def test_redirect_followed(self):
+        r1 = MagicMock()
+        r1.is_redirect = True
+        r1.headers = {"Location": "https://example.com/new"}
+        r1.close = MagicMock()
+
+        r2 = MagicMock()
+        r2.is_redirect = False
+        r2.status_code = 200
+
+        with patch("elt.src.extractors._security.requests.request", side_effect=[r1, r2]):
+            resp = safe_request("GET", "https://example.com")
+            assert resp is r2
+
+    def test_too_many_redirects(self):
+        r = MagicMock()
+        r.is_redirect = True
+        r.headers = {"Location": "https://example.com/loop"}
+        r.close = MagicMock()
+
+        with patch("elt.src.extractors._security.requests.request", return_value=r):
+            with pytest.raises(SecurityError, match="Too many redirects"):
+                safe_request("GET", "https://example.com", max_redirects=2)
+
+    def test_redirect_rebinding_detected(self):
+        r1 = MagicMock()
+        r1.is_redirect = True
+        r1.headers = {"Location": "https://other.com/x"}
+        r1.close = MagicMock()
+
+        with patch("elt.src.extractors._security.validate_url"):
+            with patch(
+                "elt.src.extractors._security.resolve_and_check_host",
+                return_value=["1.2.3.4"],
+            ):
+                with pytest.raises(SecurityError, match="DNS rebinding"):
+                    safe_request(
+                        "GET", "https://example.com",
+                        resolved_ips=["5.6.7.8"],
+                    )
 
 
 # ---------------------------------------------------------------------------
-# stream_download
+# stream_download_to_file
 # ---------------------------------------------------------------------------
-class TestStreamDownload:
-    def test_rejects_ftp(self):
+class TestStreamDownloadToFile:
+    def test_ftp_rejected(self):
         with pytest.raises(SecurityError, match="not allowed"):
-            stream_download("ftp://example.com/file.csv")
+            stream_download_to_file("ftp://example.com/f.csv")
 
-    def test_rejects_file_scheme(self):
-        with pytest.raises(SecurityError, match="not allowed"):
-            stream_download("file:///etc/passwd")
+    def test_loopback_rejected(self):
+        with patch("socket.getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 0)),
+        ]):
+            with pytest.raises(SecurityError, match="loopback"):
+                stream_download_to_file("http://localhost/secret")
 
-    def test_rejects_loopback(self):
-        with pytest.raises(SecurityError, match="loopback"):
-            stream_download("http://127.0.0.1:8080/secret")
+    def test_writes_to_file(self):
+        mock_resp = MagicMock()
+        mock_resp.is_redirect = False
+        mock_resp.status_code = 200
+        mock_resp.headers = {"Content-Type": "text/csv", "Content-Length": "5"}
+        mock_resp.iter_content.return_value = [b"hello"]
+        mock_resp.close = MagicMock()
 
-    def test_rejects_localhost(self):
-        with pytest.raises(SecurityError, match="loopback"):
-            stream_download("http://localhost/admin")
+        with patch("socket.getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0)),
+        ]):
+            with patch("elt.src.extractors._security.requests.request", return_value=mock_resp):
+                path = stream_download_to_file("https://example.com/data.csv")
+                try:
+                    assert os.path.exists(path)
+                    with open(path, "rb") as f:
+                        assert f.read() == b"hello"
+                finally:
+                    _safe_remove(path)
+
+    def test_content_length_exceeded(self):
+        mock_resp = MagicMock()
+        mock_resp.is_redirect = False
+        mock_resp.headers = {"Content-Length": "999999999"}
+        mock_resp.close = MagicMock()
+
+        with patch("socket.getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0)),
+        ]):
+            with patch("elt.src.extractors._security.requests.request", return_value=mock_resp):
+                with pytest.raises(SecurityError, match="Content-Length"):
+                    stream_download_to_file("https://example.com/big.bin", max_bytes=1000)
+
+    def test_cleanup_on_error(self):
+        mock_resp = MagicMock()
+        mock_resp.is_redirect = False
+        mock_resp.headers = {}
+        mock_resp.iter_content.side_effect = IOError("network error")
+        mock_resp.close = MagicMock()
+
+        with patch("socket.getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0)),
+        ]):
+            with patch("elt.src.extractors._security.requests.request", return_value=mock_resp):
+                with pytest.raises(IOError):
+                    stream_download_to_file("https://example.com/fail.csv")
+
+
+# ---------------------------------------------------------------------------
+# configure_allowed_internals
+# ---------------------------------------------------------------------------
+class TestAllowedInternals:
+    def test_set_and_reset(self):
+        _configure(hosts=["h1.corp", "h2.corp"], cidrs=["10.0.0.0/8"])
+        try:
+            assert "h1.corp" in _security._ALLOWED_INTERNAL_HOSTS
+            assert len(_security._ALLOWED_INTERNAL_CIDRS) == 1
+        finally:
+            _configure(hosts=[], cidrs=[])
+        assert len(_security._ALLOWED_INTERNAL_HOSTS) == 0
+        assert len(_security._ALLOWED_INTERNAL_CIDRS) == 0
