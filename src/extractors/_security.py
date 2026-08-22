@@ -41,7 +41,7 @@ def sanitize_filename(name: str, fallback: str = "download.bin") -> str:
     if not name:
         return fallback
     name = os.path.basename(name.strip())
-    name = re.sub(r'[<>:"/\\|?\x00-\x1f]', "_", name)
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
     name = name.strip(". ")
     return name or fallback
 
@@ -125,6 +125,8 @@ def is_same_host(url: str, base_url: str) -> bool:
     try:
         a = urlparse(url)
         b = urlparse(base_url)
+        if not a.hostname or not b.hostname:
+            return False
         return a.hostname == b.hostname
     except Exception:
         return False
