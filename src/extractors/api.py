@@ -1,3 +1,9 @@
+"""API REST extractor.
+
+Single request per attempt.  Preserves method, auth, headers, params, body.
+Streams attachment downloads directly to a unique temp file.  Redirects are
+followed manually with SSRF validation on each hop.
+"""
 import logging
 import os
 import tempfile
@@ -8,10 +14,11 @@ import requests
 from elt.src.connectors.airflow_connections import AirflowConnector
 from elt.src.extractors._security import (
     SecurityError,
-    create_safe_tempdir,
     is_safe_path,
+    safe_request,
     sanitize_filename,
-    stream_download,
+    stream_download_to_file,
+    unique_temp_path,
     validate_url,
 )
 from elt.src.extractors.base import BaseExtractor
@@ -49,27 +56,22 @@ class ApiExtractor(BaseExtractor):
         url = self._build_url(self.login_endpoint)
         validate_url(url)
         user, password = self._get_credentials()
-
         body = self.login_body or {"user": user, "pass": password}
 
         logger.info(f"API [{self.source_connection}] Autenticando em {url}")
 
-        response = requests.post(
-            url=url,
+        resp = safe_request(
+            "POST",
+            url,
             json=body,
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
             timeout=30,
         )
-
-        if response.status_code == 401:
-            raise ValueError(
-                f"Autenticacao falhou para {url}: "
-                f"HTTP {response.status_code} - verifique login/senha"
-            )
-
-        response.raise_for_status()
-
-        data = response.json()
+        resp.raise_for_status()
+        data = resp.json()
         token = data.get("token")
         if not token:
             raise ValueError(f"Resposta de login nao contem campo 'token': {data}")
@@ -82,6 +84,7 @@ class ApiExtractor(BaseExtractor):
         ep = (endpoint or self.endpoint).lstrip("/")
         return f"{base}/{ep}"
 
+    # ------------------------------------------------------------------
     def extract(self, row: dict) -> pd.DataFrame:
         url = self._build_url()
         validate_url(url)
@@ -100,9 +103,11 @@ class ApiExtractor(BaseExtractor):
 
         logger.info(f"API [{self.source_connection}] {self.method} {url}")
 
-        response = requests.request(
-            method=self.method,
-            url=url,
+        # Single request (no allow_redirects to keep control; safe_request
+        # handles redirects manually).
+        response = safe_request(
+            self.method,
+            url,
             headers=headers,
             params=self.params or None,
             json=self.body or None,
@@ -110,50 +115,34 @@ class ApiExtractor(BaseExtractor):
             timeout=30,
         )
 
-        if response.status_code == 401:
-            if self.auth_type == "token":
-                logger.info("Token expirado, reautenticando...")
-                self.token = self._authenticate_token()
-                headers["Authorization"] = f"Bearer {self.token}"
-                response = requests.request(
-                    method=self.method,
-                    url=url,
-                    headers=headers,
-                    params=self.params or None,
-                    json=self.body or None,
-                    timeout=30,
-                )
-            else:
-                raise ValueError(
-                    f"Autenticacao falhou para {url}: "
-                    f"HTTP {response.status_code} - verifique login/senha na Connection Airflow"
-                )
-
-        if response.status_code == 403:
-            raise ValueError(
-                f"Acesso negado para {url}: "
-                f"HTTP {response.status_code} - verifique permissoes do usuario"
+        # Handle 401 with token refresh – still a single *additional* request
+        # (the re-auth request + one data request = max 2 requests total for
+        # the token path, which is the minimum necessary).
+        if response.status_code == 401 and self.auth_type == "token":
+            logger.info("Token expirado, reautenticando...")
+            self.token = self._authenticate_token()
+            headers["Authorization"] = f"Bearer {self.token}"
+            response.close()
+            response = safe_request(
+                self.method,
+                url,
+                headers=headers,
+                params=self.params or None,
+                json=self.body or None,
+                timeout=30,
             )
 
-        if response.status_code == 404:
-            raise ValueError(
-                f"Recurso nao encontrado para {url}: "
-                f"HTTP {response.status_code}"
-            )
-
-        if response.status_code >= 500:
-            raise ValueError(
-                f"Erro no servidor remoto para {url}: "
-                f"HTTP {response.status_code}"
-            )
-
-        response.raise_for_status()
+        self._raise_for_status(response, url)
 
         content_type = response.headers.get("Content-Type", "")
         content_disposition = response.headers.get("Content-Disposition", "")
 
+        # JSON / text → read in memory (small)
         if "application/json" in content_type or "text" in content_type:
-            data = response.json()
+            try:
+                data = response.json()
+            finally:
+                response.close()
             if isinstance(data, list):
                 return pd.DataFrame(data)
             if isinstance(data, dict):
@@ -163,33 +152,69 @@ class ApiExtractor(BaseExtractor):
                 return pd.DataFrame([data])
             return pd.DataFrame([data])
 
+        # Attachment → stream to unique temp file (large)
         if "attachment" in content_disposition or "filename" in content_disposition:
-            filename = None
-            if "filename=" in content_disposition:
-                filename = content_disposition.split("filename=")[-1].strip('"')
-            elif "filename*" in content_disposition:
-                filename = content_disposition.split("filename*=")[-1].strip('"')
-
+            filename = self._parse_filename(content_disposition)
             safe_name = sanitize_filename(filename or "download.bin")
-            tmp_dir = create_safe_tempdir()
-            tmp_path = os.path.join(tmp_dir, safe_name)
-
-            if not is_safe_path(tmp_dir, tmp_path):
-                raise SecurityError(
-                    f"Resolved path escapes temp directory: {tmp_path}"
-                )
-
-            max_bytes = self.config.get("max_download_bytes", 2 * 1024 * 1024 * 1024)
-            content = stream_download(url, max_bytes=max_bytes)
-
-            with open(tmp_path, "wb") as f:
-                f.write(content)
+            tmp_path = unique_temp_path(
+                suffix=os.path.splitext(safe_name)[1] or ".bin"
+            )
+            try:
+                max_bytes = self.config.get("max_download_bytes", 500 * 1024 * 1024)
+                total = 0
+                with open(tmp_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=256 * 1024):
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise SecurityError(
+                                f"Download exceeded size limit ({max_bytes} bytes)"
+                            )
+                        f.write(chunk)
+            finally:
+                response.close()
 
             logger.info(f"Arquivo salvo temporariamente: {tmp_path}")
             return pd.DataFrame(
                 [{"file_path": tmp_path, "filename": safe_name}]
             )
 
+        # Fallback: raw content
+        try:
+            raw = response.content
+        finally:
+            response.close()
         return pd.DataFrame(
-            [{"raw_content": response.content, "status_code": response.status_code}]
+            [{"raw_content": raw, "status_code": response.status_code}]
         )
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_filename(content_disposition: str) -> str | None:
+        if "filename=" in content_disposition:
+            return content_disposition.split("filename=")[-1].strip('"')
+        if "filename*" in content_disposition:
+            return content_disposition.split("filename*=")[-1].strip('"')
+        return None
+
+    @staticmethod
+    def _raise_for_status(response: requests.Response, url: str) -> None:
+        if response.status_code == 401:
+            raise ValueError(
+                f"Autenticacao falhou para {url}: "
+                f"HTTP {response.status_code} - verifique login/senha"
+            )
+        if response.status_code == 403:
+            raise ValueError(
+                f"Acesso negado para {url}: "
+                f"HTTP {response.status_code} - verifique permissoes"
+            )
+        if response.status_code == 404:
+            raise ValueError(
+                f"Recurso nao encontrado para {url}: HTTP {response.status_code}"
+            )
+        if response.status_code >= 500:
+            raise ValueError(
+                f"Erro no servidor remoto para {url}: "
+                f"HTTP {response.status_code}"
+            )
+        response.raise_for_status()

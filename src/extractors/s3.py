@@ -10,26 +10,21 @@ Configuracao via schedule (coluna config - JSONB):
     "compression": "zip",
     "header_row": 1,
     "file_extension": ".csv",
-    "use_minio": false,
-    "minio_endpoint": "minio.example.com:9000",
-    "minio_bucket": "cnes-bronze",
-    "minio_object": "caminho/arquivo.parquet"
+    "max_download_bytes": 524288000
 }
 """
-
 import csv
 import io
 import logging
 import os
-import tempfile
 
 import pandas as pd
 
 from elt.src.extractors._security import (
     SecurityError,
-    create_safe_tempdir,
     safe_zip_extract,
-    stream_download,
+    stream_download_to_file,
+    unique_temp_path,
     validate_url,
 )
 from elt.src.extractors.base import BaseExtractor
@@ -53,50 +48,64 @@ class S3Extractor(BaseExtractor):
         delimiter = config.get("delimiter", ";")
         encoding = config.get("encoding", "latin-1")
         compression = config.get("compression", None)
-        header_row = config.get("header_row", 0)
-        max_bytes = config.get("max_download_bytes", 2 * 1024 * 1024 * 1024)
+        max_bytes = config.get("max_download_bytes", 500 * 1024 * 1024)
 
         logger.info(f"Baixando de {url}...")
-        resp_bytes = stream_download(url, max_bytes=max_bytes)
+        download_path = stream_download_to_file(url, max_bytes=max_bytes)
 
-        if compression == "zip" or url.endswith(".zip"):
-            tmp_dir = create_safe_tempdir()
-            extracted_files = safe_zip_extract(resp_bytes, tmp_dir)
-            csv_files = [f for f in extracted_files if f.endswith(".csv")]
-            if not csv_files:
-                raise ValueError("ZIP nao contem arquivos .csv")
-            csv_path = csv_files[0]
-            with open(csv_path, encoding=encoding) as f:
-                raw = f.read()
-            for f in extracted_files:
-                os.remove(f)
-            os.rmdir(tmp_dir)
-
-            reader = csv.reader(io.StringIO(raw), delimiter=delimiter)
-            header = [c.strip().strip('"').strip() for c in next(reader)]
-            rows = list(reader)
-            df = pd.DataFrame(rows, columns=header)
-
-        elif url.endswith(".csv"):
-            raw = resp_bytes.decode(encoding)
-            reader = csv.reader(io.StringIO(raw), delimiter=delimiter)
-            header = [c.strip().strip('"').strip() for c in next(reader)]
-            rows = list(reader)
-            df = pd.DataFrame(rows, columns=header)
-
-        elif url.endswith(".parquet"):
-            tmp = os.path.join(tempfile.gettempdir(), "download.parquet")
-            with open(tmp, "wb") as f:
-                f.write(resp_bytes)
-            df = pd.read_parquet(tmp)
-            os.remove(tmp)
-
-        else:
-            raw = resp_bytes.decode(encoding)
-            reader = csv.reader(io.StringIO(raw), delimiter=delimiter)
-            header = [c.strip().strip('"').strip() for c in next(reader)]
-            rows = list(reader)
-            df = pd.DataFrame(rows, columns=header)
+        try:
+            if compression == "zip" or url.endswith(".zip"):
+                df = self._extract_zip(download_path, encoding, delimiter, config)
+            elif url.endswith(".csv") or url.endswith(".csv.gz"):
+                df = self._extract_csv(download_path, encoding, delimiter)
+            elif url.endswith(".parquet"):
+                df = pd.read_parquet(download_path)
+            else:
+                df = self._extract_csv(download_path, encoding, delimiter)
+        finally:
+            from elt.src.extractors._security import _safe_remove
+            _safe_remove(download_path)
 
         logger.info(f"Extraidos {len(df)} registros de {url}")
         return df.reset_index(drop=True)
+
+    def _extract_zip(
+        self, zip_path: str, encoding: str, delimiter: str, config: dict
+    ) -> pd.DataFrame:
+        with open(zip_path, "rb") as f:
+            zip_data = f.read()
+
+        tmp_dir = unique_temp_path(suffix="").rstrip(".")
+        os.makedirs(tmp_dir, exist_ok=True)
+
+        try:
+            extracted = safe_zip_extract(zip_data, tmp_dir)
+            csv_files = [f for f in extracted if f.endswith(".csv")]
+            if not csv_files:
+                raise ValueError("ZIP nao contem arquivos .csv")
+
+            with open(csv_files[0], encoding=encoding) as f:
+                raw = f.read()
+        finally:
+            for p in extracted:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+            try:
+                os.rmdir(tmp_dir)
+            except OSError:
+                pass
+
+        reader = csv.reader(io.StringIO(raw), delimiter=delimiter)
+        header = [c.strip().strip('"').strip() for c in next(reader)]
+        rows = list(reader)
+        return pd.DataFrame(rows, columns=header)
+
+    def _extract_csv(self, path: str, encoding: str, delimiter: str) -> pd.DataFrame:
+        with open(path, encoding=encoding) as f:
+            raw = f.read()
+        reader = csv.reader(io.StringIO(raw), delimiter=delimiter)
+        header = [c.strip().strip('"').strip() for c in next(reader)]
+        rows = list(reader)
+        return pd.DataFrame(rows, columns=header)
