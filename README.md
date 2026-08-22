@@ -22,23 +22,20 @@ cd elt
 
 **Prerequisitos:** Docker Desktop instalado e rodando, ~4GB RAM livre.
 
-**O que sobe:**
-- PostgreSQL (127.0.0.1:5432) -- 5 bancos: `elt`, `bronze`, `silver`, `gold`, `airflow`
-- Airflow webserver (127.0.0.1:8080) + scheduler
-- MinIO (127.0.0.1:9000 API / 9001 Console) -- datalake em parquet
+---
 
-**Commands uteis:**
-```powershell
-.\setup.ps1                # Subir tudo
-.\setup.ps1 -Down          # Parar (volumes preservados)
-.\setup.ps1 -PurgeVolumes  # Parar e apagar dados (pede confirmacao)
-.\setup.ps1 -Status        # Ver status dos containers
-.\setup.ps1 -Logs          # Ver logs (escolhe container)
-```
+## Componentes e Portas
 
-> **Acesso de outra maquina:** As portas sao publicadas apenas em `127.0.0.1` por seguranca.
-> Para acessar por outra maquina na rede, altere as portas no `docker-compose.yml` para `0.0.0.0:PORTA:PORTA`.
-> **Atencao:** Isso pode expor os servicos pela rede local, VPN ou NetBird.
+| Componente | Imagem | Porta | Descricao |
+|-----------|--------|-------|-----------|
+| PostgreSQL | `postgres:16-alpine` | `127.0.0.1:5432` | 5 bancos: `elt`, `bronze`, `silver`, `gold`, `airflow` |
+| Airflow Webserver | `apache/airflow:2.9.3-python3.11` | `127.0.0.1:8080` | Interface de gerenciamento de DAGs |
+| Airflow Scheduler | `apache/airflow:2.9.3-python3.11` | - | Execucao agendada de DAGs |
+| MinIO API | `minio/minio:RELEASE.2024-09-22T00-33-43Z` | `127.0.0.1:9000` | API S3-compativel |
+| MinIO Console | `minio/minio:RELEASE.2024-09-22T00-33-43Z` | `127.0.0.1:9001` | Interface web MinIO |
+
+> **Portas:** Todas as portas sao publicadas apenas em `127.0.0.1` por seguranca.
+> Para acesso remoto, altere no `docker-compose.yml` para `0.0.0.0:PORTA:PORTA`.
 
 ---
 
@@ -46,23 +43,15 @@ cd elt
 
 As credenciais sao geradas automaticamente pelo `.\setup.ps1` no arquivo `.env`.
 
+Nunca commite o arquivo `.env` ao repositorio (protegido pelo `.gitignore`).
+
+| Servico | Variavel no `.env` | Como acessar |
+|---------|-------------------|--------------|
+| **PostgreSQL** | `POSTGRES_USER`, `POSTGRES_PASSWORD` | `localhost:5432` com cliente SQL |
+| **Airflow** | `AIRFLOW_ADMIN_USERNAME`, `AIRFLOW_ADMIN_PASSWORD` | http://localhost:8080 |
+| **MinIO** | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` | http://localhost:9001 |
+
 Para ver as credenciais, abra o arquivo `.env` na raiz do projeto.
-
-| Servico | URL | Arquivo |
-|---------|-----|---------|
-| **Airflow** | http://localhost:8080 | `.env` (`AIRFLOW_ADMIN_USERNAME` / `AIRFLOW_ADMIN_PASSWORD`) |
-| **MinIO Console** | http://localhost:9001 | `.env` (`MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`) |
-| **PostgreSQL** | localhost:5432 | `.env` (`POSTGRES_USER` / `POSTGRES_PASSWORD`) |
-
----
-
-## Seguranca
-
-- Senhas geradas automaticamente com caracteres aleatorios
-- Chave Fernet do Airflow gerada criptograficamente
-- Portas publicadas apenas em `127.0.0.1` (localhost)
-- Arquivos `.env` nao versionados (gitignore)
-- Credenciais nao expostas no terminal durante setup
 
 ---
 
@@ -82,6 +71,7 @@ Para ver as credenciais, abra o arquivo `.env` na raiz do projeto.
        Oracle / PostgreSQL
        MinIO (parquet)
        API REST
+       FTP
 ```
 
 ### Camadas (Medallion Architecture)
@@ -105,18 +95,16 @@ Para ver as credenciais, abra o arquivo `.env` na raiz do projeto.
 | `gold` | Modelo dimensional | `global.*` |
 | `airflow` | Metadados do Airflow | `airflow_*` |
 
-## Inicio Rapido (Docker)
+---
 
-### Pre-requisitos
-
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) instalado e rodando
-- ~4GB de RAM livre
-- Portas `5432` (PostgreSQL), `8080` (Airflow), `9000`/`9001` (MinIO) disponiveis
-
-### 1. Subir tudo
+## Commands Uteis
 
 ```powershell
-.\setup.ps1
+.\setup.ps1                # Subir tudo
+.\setup.ps1 -Down          # Parar (volumes preservados)
+.\setup.ps1 -PurgeVolumes  # Parar e apagar dados (pede confirmacao)
+.\setup.ps1 -Status        # Ver status dos containers
+.\setup.ps1 -Logs          # Ver logs (escolhe container)
 ```
 
 Ou manualmente:
@@ -125,64 +113,102 @@ Ou manualmente:
 docker compose up -d --build
 ```
 
-Isso vai:
-- Criar os 4 bancos: `elt`, `bronze`, `silver`, `gold`
-- Criar schemas e tabelas de controle no banco `elt`
-- Inserir dados de exemplo (Municipios Brasileiros IBGE)
-- Subir Airflow com as connections configuradas
-- Criar usuario `admin` / `admin`
+---
 
-### 2. Acessar
+## Extratores Disponiveis
 
-- **Airflow:** http://localhost:8080 (admin / admin)
-- **MinIO Console:** http://localhost:9001 (minioadmin / minioadmin)
-- **PostgreSQL:** localhost:5432 (user: `elt`, password: `elt123`)
+| type_source | Descricao | Parametros principais |
+|-------------|-----------|----------------------|
+| `GOOGLE_SHEETS` | Google Sheets via API | `url`, `conexao_origem_id`, `table_source`, `header_row_source` |
+| `XLSX` | Arquivo Excel local | `table_source`, `header_row_source` |
+| `DW` | Query SQL em banco PostgreSQL | `database_source`, `schema_source`, `query_source` |
+| `ORACLE` | Extracao de banco Oracle | `config.connection_airflow`, `schema_source`, `table_source` |
+| `POSTGRE` | Extracao de banco PostgreSQL | `config.connection_airflow`, `schema_source`, `table_source` |
+| `MINIO` | Arquivos Parquet/CSV do MinIO | `config.endpoint`, `config.bucket`, `config.object_name` |
+| `FTP` | Download de arquivos via FTP | `config.ftp_host`, `config.ftp_base`, `config.file_pattern`, `config.file_format` |
+| `S3` / `CKAN` / `CSV_URL` | Download de CSV/Parquet via URL | `url`, `config.delimiter`, `config.encoding` |
+| `API` | API REST generica | `config.connection_airflow`, `config.base_url`, `config.endpoint` |
 
-### 3. Rodar o pipeline
+---
 
-No Airflow, ative e execute a DAG `elt_municipios_ibge`.
+## Seguranca
+
+- Senhas geradas automaticamente com caracteres aleatorios criptograficos
+- Chave Fernet do Airflow gerada criptograficamente
+- Portas publicadas apenas em `127.0.0.1` (localhost)
+- Arquivos `.env` nao versionados (gitignore)
+- Credenciais nao expostas no terminal durante setup
+- Imagens Docker com versoes fixadas (nao `:latest`)
+- Protecao contra path traversal em downloads
+- Protecao contra SSRF (validacao de esquema e resolucao DNS)
+- Limites de tamanho em downloads e extracao de ZIPs
+- Validacao de identificadores SQL em queries
+- Credenciais mascaradas em logs
+
+---
+
+## Aplicacao em Producao
+
+Este repositorio e projetado para **desenvolvimento e testes locais**. Para uso em producao:
+
+1. **Secrets:** Use Docker secrets, Vault, ou o gerenciamento de secrets do Airflow (nao arquivos `.env`)
+2. **TLS:** Configure TLS/proxy reverso para todas as portas expostas
+3. **Network:** Use redes Docker dedicadas; nunca exponha servicos diretamente
+4. **Monitoring:** Adicione Prometheus/Grafana para metricas de Airflow e PostgreSQL
+5. **Backup:** Configure backup automatico dos volumes `elt-pgdata` e `elt-miniodata`
+6. **Logs:** Centralize logs com ELK/Fluentd/Loki
+7. **Resource Limits:** Adicione `deploy.resources.limits` no `docker-compose.yml`
+
+---
 
 ## Estrutura do Projeto
 
 ```
 elt/
-├ main.py                     # DAG Airflow (geracao dinamica)
-├ controller/                 # Orquestracao
-│  ├── load_bronze.py
-│  ├── load_silver.py
-│  ├── load_gold.py
-│  └── dags.py                # Notificacao por email
-├ models/
-│  ├── bronze/extract.py      # Extrator generico
-│  ├── silver/transform.py    # Transformacao generica
-│  └── gold/transform.py      # Modelo dimensional generico
-├ src/
-│  ├── schedule/              # Leitura da tabela de controle
-│  ├── connectors/            # Conectores de banco e servicos
-│  │   ├── postgres_connector.py
-│  │   ├── oracle_connector.py
-│  │   ├── minio_connector.py
-│  │   └── airflow_connections.py
-│  ├── extractors/            # Extratores registraveis
-│  │   ├── base.py
-│  │   ├── google_sheets.py
-│  │   ├── xlsx.py
-│  │   ├── oracle.py
-│  │   ├── postgres.py
-│  │   ├── minio.py
-│  │   ├── ftp.py
-│  │   ├── s3.py
-│  │   └── api.py
-│  └── historics/             # SCD Tipo 2
-├ sql/init/                   # Scripts de inicializacao do banco
-├ docker/
-│  ├── Dockerfile.airflow
-│  ├── airflow_init.sh
-│  └── requirements-airflow.txt
-├ docker-compose.yml
-├ .env
-└ utils/
++-- main.py                     # DAG Airflow (geracao dinamica)
++-- controller/                 # Orquestracao
+|   +-- load_bronze.py
+|   +-- load_silver.py
+|   +-- load_gold.py
+|   +-- dags.py                 # Notificacao por email
++-- models/
+|   +-- bronze/extract.py       # Extrator generico
+|   +-- silver/transform.py     # Transformacao generica
+|   +-- gold/transform.py       # Modelo dimensional generico
++-- src/
+|   +-- schedule/               # Leitura da tabela de controle
+|   +-- connectors/             # Conectores de banco e servicos
+|   |   +-- postgres_connector.py
+|   |   +-- oracle_connector.py
+|   |   +-- minio_connector.py
+|   |   +-- airflow_connections.py
+|   +-- extractors/             # Extratores registraveis
+|   |   +-- base.py
+|   |   +-- _security.py        # Utilitarios de seguranca
+|   |   +-- google_sheets.py
+|   |   +-- xlsx.py
+|   |   +-- oracle.py
+|   |   +-- postgres.py
+|   |   +-- minio.py
+|   |   +-- ftp.py
+|   |   +-- s3.py
+|   |   +-- api.py
+|   +-- utils/
+|   |   +-- validation.py       # Validacao de identificadores SQL
+|   +-- historics/              # SCD Tipo 2
++-- sql/init/                   # Scripts de inicializacao do banco
++-- docker/
+|   +-- Dockerfile.airflow
+|   +-- airflow_init.sh
+|   +-- requirements-airflow.txt
++-- docker-compose.yml
++-- .env                        # Credenciais (nao versionado)
++-- .env.example                # Template de configuracao
++-- THIRD_PARTY_NOTICES.md      # Licencas de dependencias
++-- LICENSE                     # MIT License
 ```
+
+---
 
 ## Como Usar
 
@@ -276,23 +302,7 @@ VALUES
  '{"minio": {"bucket": "elt-datalake", "format": "parquet", "object_name": "bronze/minha_tabela.parquet"}}');
 ```
 
-Para **ler de MinIO** (em vez de SQL) no silver/gold, use `"minio_source"`:
-
-```sql
--- Silver: ler do MinIO e gravar no PostgreSQL
-INSERT INTO elt.global.schedule
-(type_source, layer, projeto, ordem, ativo,
- schedule_cron,
- table_destiny, schema_destiny, strategy_destiny,
- config)
-VALUES
-('DW', 'silver', 'meu_projeto', 1, TRUE,
- '0 7 * * 5',
- 'minha_tabela_tratada', 'global', 'truncate',
- '{"minio_source": {"bucket": "elt-datalake", "format": "parquet", "object_name": "bronze/minha_tabela.parquet"}}');
-```
-
-**Fluxo flexivel por camada:**
+### Fluxo flexivel por camada
 
 | Camada | Origem | Destino | Config |
 |--------|--------|---------|--------|
@@ -315,40 +325,7 @@ O Airflow cria automaticamente uma DAG para cada projeto com `schedule_cron` pre
 
 Alem disso, a DAG `elt_pipeline` (geral) executa todos os projetos.
 
-### 5. Logs no Airflow
-
-Cada camada gera logs descritivos no Airflow:
-
-```
-[BRONZE] Conectado a origem: https://raw.githubusercontent.com/...
-[BRONZE] Lido 5571 registros da origem
-[BRONZE] Enviado para MinIO: bronze/tb_municipios_ibge.parquet (5571 registros)
-
-[SILVER] Lendo de MinIO: minio://elt-datalake/bronze/tb_municipios_ibge.parquet
-[SILVER] Lido 5571 registros do MinIO
-[SILVER] Tabela global.tb_municipios_nf criada/atualizada com 5571 registros
-
-[GOLD] Conectado a origem: elt-postgres:5432 banco=silver
-[GOLD] Executando query para dm_municipios_por_uf
-[GOLD] Lido 27 registros da origem
-[GOLD] Tabela global.dm_municipios_por_uf criada/atualizada com 27 registros
-```
-
-## Extratores Disponiveis
-
-| type_source | Descricao | Parametros principais |
-|-------------|-----------|----------------------|
-| `GOOGLE_SHEETS` | Google Sheets via API | `url`, `conexao_origem_id`, `table_source`, `header_row_source` |
-| `XLSX` | Arquivo Excel local | `table_source`, `header_row_source` |
-| `DW` | Query SQL em banco PostgreSQL | `database_source`, `schema_source`, `query_source` |
-| `ORACLE` | Extracao de banco Oracle | `config.connection_airflow`, `schema_source`, `table_source` |
-| `POSTGRE` | Extracao de banco PostgreSQL | `config.connection_airflow`, `schema_source`, `table_source` |
-| `MINIO` | Arquivos Parquet/CSV do MinIO | `config.endpoint`, `config.bucket`, `config.object_name` |
-| `FTP` | Download de arquivos via FTP generico | `config.ftp_host`, `config.ftp_base`, `config.file_pattern`, `config.file_format` |
-| `S3` / `CKAN` / `CSV_URL` | Download de CSV/Parquet via URL | `url`, `config.delimiter`, `config.encoding` |
-| `API` | API REST generica | `config.connection_airflow`, `config.base_url`, `config.endpoint` |
-
-## Referencia de Cron
+### 5. Referencia de Cron
 
 A coluna `schedule_cron` usa o formato padrao do Airflow:
 
@@ -368,4 +345,6 @@ minuto hora dia_do_mes mes dia_da_semana
 
 ## Licenca
 
-MIT License
+MIT License - veja [LICENSE](LICENSE) para detalhes.
+
+Dependencias de terceiros: veja [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
