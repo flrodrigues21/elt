@@ -18,6 +18,7 @@ from typing import Optional
 import pandas as pd
 from minio import Minio
 
+from elt.src.extractors._security import is_safe_path, sanitize_filename
 from elt.src.extractors.base import BaseExtractor
 
 logger = logging.getLogger(__name__)
@@ -62,8 +63,11 @@ class MinioExtractor(BaseExtractor):
 
         tmp = os.path.join(
             tempfile.gettempdir(),
-            object_name.replace("/", "_")
+            sanitize_filename(object_name.replace("/", "_"))
         )
+
+        if not is_safe_path(tempfile.gettempdir(), tmp):
+            raise ValueError(f"Resolved temp path escapes temp directory: {tmp}")
 
         logger.info(f"Baixando minio://{bucket}/{object_name}")
         client.fget_object(bucket, object_name, tmp)
