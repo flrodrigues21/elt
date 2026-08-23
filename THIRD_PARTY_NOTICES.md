@@ -131,7 +131,7 @@ for guidance on license compliance in your specific context.
 - **License:** BSD-3-Clause
 - **License Text:** https://github.com/jupyter/jupyter_server/blob/main/LICENSE
 - **Usage:** JupyterLab interactive IDE for Data Lab notebooks
-- **Image:** `jupyter/pyspark-notebook:python-3.11`
+- **Image:** `jupyter/pyspark-notebook:python-3.11@sha256:7d0b19de...`
 
 ### PySpark (Apache Spark)
 

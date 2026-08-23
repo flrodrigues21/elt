@@ -95,6 +95,27 @@ class TestNotebookStructure:
         rewritten = json.loads(json.dumps(original))
         assert original == rewritten
 
+    @pytest.mark.parametrize("name", REQUIRED_NOTEBOOKS)
+    def test_code_cells_have_execution_fields(self, name):
+        """Code cells must have execution_count and outputs (ready to run)."""
+        path = DATA_LAB / name
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        for i, cell in enumerate(data["cells"]):
+            if cell["cell_type"] == "code":
+                assert "execution_count" in cell, f"{name} cell {i}: missing execution_count"
+                assert "outputs" in cell, f"{name} cell {i}: missing outputs"
+                assert cell["execution_count"] is None, f"{name} cell {i}: execution_count not null"
+
+    @pytest.mark.parametrize("name", REQUIRED_NOTEBOOKS)
+    def test_notebook_language_version(self, name):
+        """Python version in metadata must be 3.11.x (matching base image)."""
+        path = DATA_LAB / name
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        ver = data.get("metadata", {}).get("language_info", {}).get("version", "")
+        assert ver.startswith("3.11"), f"{name}: expected Python 3.11.x, got {ver}"
+
 
 # =====================================================================
 # Docker Compose validation
@@ -272,6 +293,22 @@ class TestDockerFiles:
         assert user_line_idx is not None, "Dockerfile must use USER NB_UID"
         assert pip_line_idx is not None, "Dockerfile must have pip install"
         assert user_line_idx < pip_line_idx, "pip install must run as non-root"
+
+    def test_dockerfile_has_sha256_digest(self):
+        """Base image must be pinned by SHA-256 for reproducibility."""
+        content = DOCKERFILE.read_text(encoding="utf-8")
+        assert "@sha256:" in content, "Dockerfile must pin image by SHA-256 digest"
+
+    def test_entrypoint_disables_token_auth(self):
+        """Password-only auth: token must be set to empty string."""
+        content = ENTRYPOINT.read_text(encoding="utf-8")
+        assert "token" in content
+        assert "''" in content or '""' in content, "token must be set to empty"
+
+    def test_entrypoint_starts_lab(self):
+        """Must start JupyterLab, not basic notebook."""
+        content = ENTRYPOINT.read_text(encoding="utf-8")
+        assert "jupyter lab" in content or "jupyterlab" in content
 
 
 # =====================================================================

@@ -256,8 +256,9 @@ O ELT Lab inclui um ambiente **JupyterLab** com 13 notebooks para explorar e apr
 
 1. O setup ja inicia o JupyterLab automaticamente
 2. Abra http://localhost:8888
-3. Use a senha gerada no arquivo `.env` (`JUPYTER_PASSWORD`)
-4. Navegue ate a pasta `Data Lab` no JupyterLab
+3. Na tela de login, insira a senha gerada no arquivo `.env` (`JUPYTER_PASSWORD`)
+4. O usuario e sempre `jovyan` (configurado via `JUPYTER_USERNAME` no `.env`)
+5. Navegue ate a pasta `Data Lab` no JupyterLab
 
 ### Notebooks
 
@@ -298,12 +299,14 @@ O ELT Lab inclui um ambiente **JupyterLab** com 13 notebooks para explorar e apr
 ### Seguranca do Data Lab
 
 - Porta publicada apenas em `127.0.0.1` (localhost)
-- Autenticacao por senha (hash SHA-256 gerado no entrypoint)
+- Autenticacao por senha (hash SHA-256, token desabilitado)
+- Tela de login obrigatoria no navegador (senha unica, sem token)
 - Todos os notebooks funcionam offline (sem internet)
 - Dados sinteticos (sem dados reais ou credenciais)
 - Diretorio ELT montado como **somente leitura**
 - Limites de recursos: 4GB RAM, 2 CPUs
 - Container nao roda como root
+- Imagem Docker com SHA-256 fixado (reprodutibilidade)
 
 ---
 

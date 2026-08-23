@@ -16,7 +16,7 @@ echo "=== ELT Lab — JupyterLab ==="
 JUPYTER_USERNAME="${JUPYTER_USERNAME:-jovyan}"
 export JUPYTER_USERNAME
 
-# --- Generate password hash (bcrypt via jupyter_server.auth) ---
+# --- Generate password hash (SHA-256 via jupyter_server.auth) ---
 HASH=$(python3 -c "
 from jupyter_server.auth import passwd
 import os
@@ -34,6 +34,7 @@ c.ServerApp.ip = '0.0.0.0'
 c.ServerApp.port = 8888
 c.ServerApp.open_browser = False
 c.ServerApp.allow_root = False
+c.ServerApp.token = ''
 c.ServerApp.password = '${HASH}'
 c.ServerApp.terminado_settings = {'shell_command': ['/bin/bash']}
 c.ServerApp.extra_static_paths = []
@@ -53,6 +54,6 @@ echo "URL:  http://localhost:${JUPYTER_PORT:-8888}"
 echo "Dir:  /home/jovyan/work"
 echo "Note: the JupyterLab login screen requires ONLY the password."
 
-exec start-notebook.py \
+exec jupyter lab \
     --NotebookApp.notebook_dir='/home/jovyan/work' \
     --ServerApp.terminado_settings='{"shell_command": ["/bin/bash"]}'
