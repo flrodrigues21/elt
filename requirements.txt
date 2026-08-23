@@ -1,6 +1,6 @@
 apache-airflow>=2.7.0
 dotenv>=0.9.9
-google-auth>=2.50.0
+google-auth>=2.56.3
 google-api-python-client>=2.130.0
 gspread>=6.2.1
 openpyxl>=3.1.5
