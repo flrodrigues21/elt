@@ -33,6 +33,7 @@ cd elt
 | Airflow Scheduler | `apache/airflow:2.9.3-python3.11` | - | Execucao agendada de DAGs |
 | MinIO API | `minio/minio:RELEASE.2024-09-22T00-33-43Z` | `127.0.0.1:9000` | API S3-compativel |
 | MinIO Console | `minio/minio:RELEASE.2024-09-22T00-33-43Z` | `127.0.0.1:9001` | Interface web MinIO |
+| JupyterLab | `jupyter/pyspark-notebook:python-3.11` | `127.0.0.1:8888` | IDE interativo com 13 notebooks de dados |
 
 > **Portas:** Todas as portas sao publicadas apenas em `127.0.0.1` por seguranca.
 > **Atencao:** Alterar para `0.0.0.0` expoe os servicos a rede local/externa.
@@ -61,6 +62,15 @@ cd elt
 | **python-oracledb** | Driver Oracle para Python (modo Thin) | Conexao com Oracle sem Oracle Client | `src/connectors/oracle_connector.py` | Apache 2.0 | [oracle.github.io/python-oracledb](https://oracle.github.io/python-oracledb/) \| [License](https://github.com/oracle/python-oracledb/blob/main/LICENSE.txt) |
 | **google-api-python-client** | Cliente Python para Google APIs | Acesso ao Google Sheets API v4 | `src/extractors/google_sheets.py` | Apache 2.0 | [github.com/googleapis/google-api-python-client](https://github.com/googleapis/google-api-python-client) \| [License](https://github.com/googleapis/google-api-python-client/blob/main/LICENSE) |
 | **gspread** | Wrapper Python para Google Sheets | Abstracao simplificada do Sheets API | `src/extractors/google_sheets.py` | MIT | [github.com/burnash/gspread](https://github.com/burnash/gspread) \| [License](https://github.com/burnash/gspread/blob/master/LICENSE) |
+| **JupyterLab** | IDE interativo para notebooks | Ambiente de exploracao e aprendizado de dados | `docker/Dockerfile.jupyter`, `data_lab/*.ipynb` | BSD-3-Clause | [jupyter.org](https://jupyter.org/) \| [License](https://github.com/jupyter/jupyter_server/blob/main/LICENSE) |
+| **PySpark** | API Python para Apache Spark | Processamento distribuido de dados (notebooks 10-12) | `docker/Dockerfile.jupyter` (base image) | Apache 2.0 | [spark.apache.org](https://spark.apache.org/) \| [License](https://www.apache.org/licenses/LICENSE-2.0) |
+| **NumPy** | Computacao numerica vetorial | Arrays e operacoes matriciais (notebook 02) | `docker/Dockerfile.jupyter` | BSD-3-Clause | [numpy.org](https://numpy.org/) \| [License](https://github.com/numpy/numpy/blob/main/LICENSE.txt) |
+| **Polars** | DataFrame framework em Rust | Alternativa rapida ao Pandas (notebook 04) | `docker/Dockerfile.jupyter` | MIT | [pola.rs](https://pola.rs/) \| [License](https://github.com/pola-rs/polars/blob/main/LICENSE.txt) |
+| **DuckDB** | Database analitico embutido | SQL sobre DataFrames (notebook 04) | `docker/Dockerfile.jupyter` | MIT | [duckdb.org](https://duckdb.org/) \| [License](https://github.com/duckdb/duckdb/blob/main/LICENSE) |
+| **Matplotlib** | Visualizacao 2D para Python | Graficos estaticos (notebook 08) | `docker/Dockerfile.jupyter` | PSF-based | [matplotlib.org](https://matplotlib.org/) \| [License](https://github.com/matplotlib/matplotlib/blob/main/LICENSE) |
+| **Seaborn** | Visualizacao estatistica | Graficos de distribuicao, correlacao (notebook 08) | `docker/Dockerfile.jupyter` | BSD-3-Clause | [seaborn.pydata.org](https://seaborn.pydata.org/) \| [License](https://github.com/mwaskom/seaborn/blob/master/LICENSE) |
+| **Plotly** | Visualizacao interativa | Dashboards e graficos interativos (notebook 08) | `docker/Dockerfile.jupyter` | MIT | [plotly.com](https://plotly.com/python/) \| [License](https://github.com/plotly/plotly.py/blob/master/LICENSE) |
+| **scikit-learn** | Machine Learning para Python | Classificacao, regressao, pipelines (notebook 09) | `docker/Dockerfile.jupyter` | BSD-3-Clause | [scikit-learn.org](https://scikit-learn.org/) \| [License](https://github.com/scikit-learn/scikit-learn/blob/main/LICENSE) |
 
 ---
 
@@ -229,9 +239,71 @@ elt/
 +-- docker-compose.yml
 +-- .env                        # Credenciais (nao versionado)
 +-- .env.example                # Template de configuracao
++-- data_lab/                   # JupyterLab notebooks (Data Lab)
+|   +-- 00_...ipynb ate 12_...ipynb
+|   +-- datasets/               # Datasets gerados pelos notebooks
 +-- THIRD_PARTY_NOTICES.md      # Licencas de dependencias
 +-- LICENSE                     # MIT License
 ```
+
+---
+
+## Jupyter Data Lab
+
+O ELT Lab inclui um ambiente **JupyterLab** com 13 notebooks para explorar e aprender conceitos de dados.
+
+### Como acessar
+
+1. O setup ja inicia o JupyterLab automaticamente
+2. Abra http://localhost:8888
+3. Use a senha gerada no arquivo `.env` (`JUPYTER_PASSWORD`)
+4. Navegue ate a pasta `Data Lab` no JupyterLab
+
+### Notebooks
+
+| # | Notebook | Conteudo |
+|---|----------|----------|
+| 00 | Boas Vindas e Validacao | Verifica Python, Spark, PostgreSQL, todas as bibliotecas |
+| 01 | Python para Dados | Lists, dicts, comprehensions, funcoes, try/except, JSON |
+| 02 | NumPy | Arrays, indexacao, broadcasting, agregacoes |
+| 03 | Pandas | DataFrame, filtros, groupby, merge, NaN |
+| 04 | Polars e DuckDB | LazyFrame, SQL direto no DataFrame, performance |
+| 05 | Arquivos | CSV, Excel, Parquet, particionamento |
+| 06 | APIs e JSON | Mock server local, GET, erros, json_normalize |
+| 07 | SQLAlchemy e PostgreSQL | Conexao, DDL, DML, transacoes com cleanup |
+| 08 | Visualizacao de Dados | Matplotlib, Seaborn, Plotly (offline) |
+| 09 | Scikit-Learn Basico | Pipeline, train/test split, classification report |
+| 10 | PySpark Fundamentos | Schema, select, groupBy, join, window, explain |
+| 11 | PySpark Parquet e Medalhao | Bronze/Silver/Gold com PySpark + Parquet |
+| 12 | Desafios de Entrevista | Running total, gap-and-islands, deduplicacao, pivot |
+
+### Stack do Data Lab
+
+| Biblioteca | Versao | Uso |
+|-----------|--------|-----|
+| NumPy | 1.26.4 | Arrays numericos |
+| pandas | 2.2.3 | Manipulacao de DataFrames |
+| Polars | 1.12.0 | DataFrame em Rust (rapido) |
+| DuckDB | 1.1.3 | SQL analitico embutido |
+| PyArrow | 17.0.0 | Formato Parquet |
+| OpenPyXL | 3.1.5 | Leitura/escrita Excel |
+| SQLAlchemy | 2.0.36 | Conexao com bancos |
+| psycopg2 | 2.9.10 | Adaptador PostgreSQL |
+| Matplotlib | 3.9.2 | Graficos estaticos |
+| Seaborn | 0.13.2 | Graficos estatisticos |
+| Plotly | 5.24.1 | Graficos interativos |
+| scikit-learn | 1.5.2 | Machine Learning |
+| PySpark | (base image) | Processamento distribuido |
+
+### Seguranca do Data Lab
+
+- Porta publicada apenas em `127.0.0.1` (localhost)
+- Autenticacao por senha (hash SHA-256 gerado no entrypoint)
+- Todos os notebooks funcionam offline (sem internet)
+- Dados sinteticos (sem dados reais ou credenciais)
+- Diretorio ELT montado como **somente leitura**
+- Limites de recursos: 4GB RAM, 2 CPUs
+- Container nao roda como root
 
 ---
 
