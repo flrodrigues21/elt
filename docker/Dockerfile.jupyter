@@ -27,19 +27,16 @@ RUN pip install --no-cache-dir \
         seaborn==0.13.2 \
         plotly==5.24.1 \
         scikit-learn==1.5.2 \
+        pyspark==3.5.0 \
         pytest==8.3.3 \
         nbformat==5.10.4
 
-ENV SPARK_HOME=/opt/spark
-ENV PATH="${SPARK_HOME}/bin:${SPARK_HOME}/sbin:${PATH}"
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV PYSPARK_PYTHON=python
 ENV PYSPARK_DRIVER_PYTHON=python
 
 RUN mkdir -p /home/jovyan/work/ELT /home/jovyan/work/Data\ Lab/datasets
 
-COPY docker/jupyter_entrypoint.sh /usr/local/bin/jupyter_entrypoint.sh
-RUN chmod +x /usr/local/bin/jupyter_entrypoint.sh
+COPY --chmod=755 --chown=${NB_UID}:${NB_GID} docker/jupyter_entrypoint.sh /usr/local/bin/jupyter_entrypoint.sh
 
 EXPOSE 8888
 

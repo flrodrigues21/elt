@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # ELT Lab
 # Sobe PostgreSQL + Airflow + MinIO via Docker
 # ============================================================
@@ -139,10 +139,80 @@ if (-not (Test-Path $envFile)) {
         exit 1
     }
 } else {
-    Write-Host ".env ja existe, preservando valores existentes." -ForegroundColor DarkGray
+    Write-Header ".env ja existe — atualizando chaves Jupyter ausentes/vazias (idempotente)"
+    $lines = Get-Content $envFile
+    $changed = $false
+
+    # Idempotente: acrescenta/atualiza somente o que esta ausente ou vazio.
+    # Nunca substitui credenciais existentes.
+
+    # JUPYTER_PORT: default 8888 quando ausente ou vazio
+    $hasPortLine = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^JUPYTER_PORT=') {
+            $hasPortLine = $true
+            if ($lines[$i] -match '^JUPYTER_PORT=\s*$') {
+                $lines[$i] = "JUPYTER_PORT=8888"
+                $changed = $true
+                Write-Host "  JUPYTER_PORT: preenchido com 8888 (estava vazio)" -ForegroundColor Yellow
+            }
+        }
+    }
+    if (-not $hasPortLine) {
+        $lines += "JUPYTER_PORT=8888"
+        $changed = $true
+        Write-Host "  JUPYTER_PORT: adicionado (ausente no .env)" -ForegroundColor Yellow
+    }
+
+    # JUPYTER_USERNAME: default jovyan quando ausente ou vazio
+    $hasUsernameLine = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^JUPYTER_USERNAME=') {
+            $hasUsernameLine = $true
+            if ($lines[$i] -match '^JUPYTER_USERNAME=\s*$') {
+                $lines[$i] = "JUPYTER_USERNAME=jovyan"
+                $changed = $true
+                Write-Host "  JUPYTER_USERNAME: preenchido com jovyan (estava vazio)" -ForegroundColor Yellow
+            }
+        }
+    }
+    if (-not $hasUsernameLine) {
+        $lines += "JUPYTER_USERNAME=jovyan"
+        $changed = $true
+        Write-Host "  JUPYTER_USERNAME: adicionado como jovyan (ausente no .env)" -ForegroundColor Yellow
+    }
+
+    # JUPYTER_PASSWORD: gera quando ausente ou vazia; nunca sobrescreve valor definido
+    $hasPasswordLine = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^JUPYTER_PASSWORD=') {
+            $hasPasswordLine = $true
+            if ($lines[$i] -match '^JUPYTER_PASSWORD=\s*$') {
+                $newPass = New-SecureString 20
+                $lines[$i] = "JUPYTER_PASSWORD=$newPass"
+                $changed = $true
+                Write-Host "  JUPYTER_PASSWORD: gerado (20 caracteres, estava vazio)" -ForegroundColor Yellow
+            } else {
+                Write-Host "  JUPYTER_PASSWORD: preservado (ja definido)" -ForegroundColor DarkGray
+            }
+        }
+    }
+    if (-not $hasPasswordLine) {
+        $newPass = New-SecureString 20
+        $lines += "JUPYTER_PASSWORD=$newPass"
+        $changed = $true
+        Write-Host "  JUPYTER_PASSWORD: gerado (20 caracteres, estava ausente)" -ForegroundColor Yellow
+    }
+
+    if ($changed) {
+        $lines | Set-Content $envFile
+        Write-Host ".env atualizado (valores completos nao exibidos por seguranca)." -ForegroundColor Green
+    } else {
+        Write-Host ".env preservado sem alteracoes." -ForegroundColor Green
+    }
 }
 
-Write-Header "Subindo PostgreSQL + Airflow + MinIO via Docker"
+Write-Header "Subindo PostgreSQL + MinIO via Docker"
 $ErrorActionPreferenceOld = $ErrorActionPreference
 $ErrorActionPreference = "SilentlyContinue"
 docker compose up -d --build postgres minio
@@ -167,7 +237,14 @@ if ($retry -eq $maxRetries) {
     exit 1
 }
 
-Write-Header "Subindo Airflow (init, webserver, scheduler)"
+Write-Header "Construindo imagem do Jupyter"
+docker compose build jupyter
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERRO: falha ao construir a imagem do Jupyter." -ForegroundColor Red
+    exit 1
+}
+
+Write-Header "Subindo Airflow (init, webserver, scheduler) + Jupyter"
 $ErrorActionPreferenceOld = $ErrorActionPreference
 $ErrorActionPreference = "SilentlyContinue"
 docker compose up -d --no-build

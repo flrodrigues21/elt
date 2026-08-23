@@ -197,6 +197,50 @@ class TestComposeSecurity:
                     return
         pytest.fail("Jupyter must depend on postgres with service_healthy")
 
+    def _jupyter_block(self):
+        """Extract the jupyter service block from compose file."""
+        content = COMPOSE.read_text(encoding="utf-8")
+        lines = content.splitlines()
+        block = []
+        in_jupyter = False
+        indent_level = 0
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("jupyter:"):
+                in_jupyter = True
+                indent_level = len(line) - len(line.lstrip())
+                continue
+            if in_jupyter:
+                curr_indent = len(line) - len(line.lstrip()) if stripped else indent_level + 1
+                if curr_indent <= indent_level and stripped and not stripped.startswith("#"):
+                    break
+                block.append(line)
+        return "\n".join(block)
+
+    def test_jupyter_no_env_file_directive(self):
+        """Jupyter service must NOT use env_file (explicit env only)."""
+        block = self._jupyter_block()
+        assert "env_file:" not in block, "jupyter service must not use env_file"
+
+    def test_jupyter_explicit_postgres_env(self):
+        """Jupyter environment must explicitly set POSTGRES_HOST/PORT."""
+        block = self._jupyter_block()
+        assert "POSTGRES_HOST" in block
+        assert "elt-postgres" in block
+        assert "POSTGRES_PORT" in block
+
+    def test_jupyter_no_airflow_secrets(self):
+        """Jupyter must NOT receive AIRFLOW_ADMIN_PASSWORD or FERNET_KEY."""
+        block = self._jupyter_block()
+        assert "AIRFLOW_ADMIN_PASSWORD" not in block
+        assert "AIRFLOW_FERNET_KEY" not in block
+
+    def test_healthcheck_validates_auth(self):
+        """Healthcheck must hit /login (proves auth is active), not just /api."""
+        block = self._jupyter_block()
+        assert "/login" in block, "healthcheck must validate login page"
+        assert "password" in block.lower(), "healthcheck must check password field"
+
 
 # =====================================================================
 # setup.ps1 validation
@@ -299,6 +343,18 @@ class TestDockerFiles:
         content = DOCKERFILE.read_text(encoding="utf-8")
         assert "@sha256:" in content, "Dockerfile must pin image by SHA-256 digest"
 
+    def test_dockerfile_copy_chmod_chown(self):
+        """Entrypoint must be copied with explicit permissions and owner."""
+        content = DOCKERFILE.read_text(encoding="utf-8")
+        assert "--chmod=755" in content, "COPY must use --chmod=755"
+        assert f"--chown={{{{NB_UID}}}}:{{{{NB_GID}}}}" in content or "--chown=${NB_UID}:${NB_GID}" in content
+
+    def test_dockerfile_no_forced_java_spark_home(self):
+        """Must NOT override JAVA_HOME/SPARK_HOME (preserve official image)."""
+        content = DOCKERFILE.read_text(encoding="utf-8")
+        assert "ENV JAVA_HOME" not in content, "must not force JAVA_HOME"
+        assert "ENV SPARK_HOME" not in content, "must not force SPARK_HOME"
+
     def test_entrypoint_disables_token_auth(self):
         """Password-only auth: token must be set to empty string."""
         content = ENTRYPOINT.read_text(encoding="utf-8")
@@ -309,6 +365,27 @@ class TestDockerFiles:
         """Must start JupyterLab, not basic notebook."""
         content = ENTRYPOINT.read_text(encoding="utf-8")
         assert "jupyter lab" in content or "jupyterlab" in content
+
+    def test_entrypoint_passwd_default_algorithm(self):
+        """Must use passwd(pw) with default secure algorithm (Argon2/sha512)."""
+        content = ENTRYPOINT.read_text(encoding="utf-8")
+        assert "passwd(" in content
+        assert "algorithm='sha256'" not in content, "do not pin weak sha256"
+        assert "bcrypt" not in content.lower()
+
+    def test_entrypoint_no_recursive_chown_on_work(self):
+        """Must NOT chown -R /home/jovyan/work (RO mounts would fail)."""
+        content = ENTRYPOINT.read_text(encoding="utf-8")
+        assert "chown -R" not in content.split("/home/jovyan/work")[1] if "/home/jovyan/work" in content else True
+
+    def test_entrypoint_no_password_in_output(self):
+        """Password and hash must never be echoed/logged."""
+        content = ENTRYPOINT.read_text(encoding="utf-8")
+        # No echo of JUPYTER_PASSWORD value or HASH value
+        for line in content.splitlines():
+            if line.strip().startswith("echo"):
+                assert "$JUPYTER_PASSWORD}" not in line.replace("${JUPYTER_PASSWORD:-", "")
+                assert "${HASH}" not in line
 
 
 # =====================================================================
@@ -358,6 +435,33 @@ class TestNotebookContent:
         nb = _load_notebook("07_SQLAlchemy_e_PostgreSQL.ipynb")
         all_src = _all_source(nb)
         assert "elt-postgres" in all_src
+
+    def test_07_no_password_fallback(self):
+        """Notebook 07 must NOT have hardcoded fallback password."""
+        nb = _load_notebook("07_SQLAlchemy_e_PostgreSQL.ipynb")
+        all_src = _all_source(nb)
+        assert "senha_secreta" not in all_src, "fallback password must be removed"
+        assert "raise RuntimeError" in all_src, "must raise when POSTGRES_PASSWORD missing"
+
+    @pytest.mark.parametrize("name", [
+        "00_Boas_Vindas_e_Validacao_do_Ambiente.ipynb",
+        "10_PySpark_Fundamentos.ipynb",
+        "11_PySpark_Parquet_e_Medalhao.ipynb",
+        "12_Desafios_de_Entrevista.ipynb",
+    ])
+    def test_spark_local_2_cores(self, name):
+        """Spark notebooks must use local[2] not local[*]."""
+        nb = _load_notebook(name)
+        all_src = _all_source(nb)
+        assert "local[*]" not in all_src, f"{name}: must use local[2]"
+        assert "local[2]" in all_src
+
+    def test_00_validates_java_home(self):
+        """Notebook 00 must validate JAVA_HOME from official image."""
+        nb = _load_notebook("00_Boas_Vindas_e_Validacao_do_Ambiente.ipynb")
+        all_src = _all_source(nb)
+        assert "JAVA_HOME" in all_src
+        assert "shutil.which" in all_src or "which" in all_src
 
 
 def _load_notebook(name):
