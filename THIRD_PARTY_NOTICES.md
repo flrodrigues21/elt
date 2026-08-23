@@ -124,6 +124,79 @@ for guidance on license compliance in your specific context.
 - **License Text:** https://github.com/burnash/gspread/blob/master/LICENSE
 - **Usage:** Google Sheets API wrapper (simplified interface)
 
+### JupyterHub / JupyterLab
+
+- **Website:** https://jupyter.org
+- **Repository:** https://github.com/jupyter/jupyter_server
+- **License:** BSD-3-Clause
+- **License Text:** https://github.com/jupyter/jupyter_server/blob/main/LICENSE
+- **Usage:** JupyterLab interactive IDE for Data Lab notebooks
+- **Image:** `jupyter/pyspark-notebook:python-3.11@sha256:7d0b19de...`
+
+### PySpark (Apache Spark)
+
+- **Website:** https://spark.apache.org
+- **Repository:** https://github.com/apache/spark
+- **License:** Apache License 2.0
+- **License Text:** https://www.apache.org/licenses/LICENSE-2.0
+- **Usage:** Distributed data processing (Data Lab notebooks 10-12)
+
+### NumPy
+
+- **Website:** https://numpy.org
+- **Repository:** https://github.com/numpy/numpy
+- **License:** BSD-3-Clause
+- **License Text:** https://github.com/numpy/numpy/blob/main/LICENSE.txt
+- **Usage:** Numerical arrays (Data Lab notebook 02)
+
+### Polars
+
+- **Website:** https://pola.rs
+- **Repository:** https://github.com/pola-rs/polars
+- **License:** MIT License
+- **License Text:** https://github.com/pola-rs/polars/blob/main/LICENSE.txt
+- **Usage:** High-performance DataFrame library (Data Lab notebook 04)
+
+### DuckDB
+
+- **Website:** https://duckdb.org
+- **Repository:** https://github.com/duckdb/duckdb
+- **License:** MIT License
+- **License Text:** https://github.com/duckdb/duckdb/blob/main/LICENSE
+- **Usage:** In-process SQL analytics engine (Data Lab notebook 04)
+
+### Matplotlib
+
+- **Website:** https://matplotlib.org
+- **Repository:** https://github.com/matplotlib/matplotlib
+- **License:** PSF-based (Matplotlib License)
+- **License Text:** https://github.com/matplotlib/matplotlib/blob/main/LICENSE
+- **Usage:** 2D plotting library (Data Lab notebook 08)
+
+### Seaborn
+
+- **Website:** https://seaborn.pydata.org
+- **Repository:** https://github.com/mwaskom/seaborn
+- **License:** BSD-3-Clause
+- **License Text:** https://github.com/mwaskom/seaborn/blob/master/LICENSE
+- **Usage:** Statistical data visualization (Data Lab notebook 08)
+
+### Plotly
+
+- **Website:** https://plotly.com
+- **Repository:** https://github.com/plotly/plotly.py
+- **License:** MIT License
+- **License Text:** https://github.com/plotly/plotly.py/blob/master/LICENSE
+- **Usage:** Interactive visualization (Data Lab notebook 08)
+
+### scikit-learn
+
+- **Website:** https://scikit-learn.org
+- **Repository:** https://github.com/scikit-learn/scikit-learn
+- **License:** BSD-3-Clause
+- **License Text:** https://github.com/scikit-learn/scikit-learn/blob/main/LICENSE
+- **Usage:** Machine learning (Data Lab notebook 09)
+
 ### python-dotenv
 
 - **Website:** https://github.com/theskumar/python-dotenv
@@ -143,12 +216,13 @@ for guidance on license compliance in your specific context.
 
 | License | Components |
 |---------|-----------|
-| Apache 2.0 | Airflow, PyArrow, Requests, python-oracledb, minio-py, google-api-python-client |
-| MIT | SQLAlchemy, OpenPyXL, gspread |
-| BSD-3-Clause | pandas, python-dotenv |
+| Apache 2.0 | Airflow, PyArrow, Requests, python-oracledb, minio-py, google-api-python-client, PySpark |
+| MIT | SQLAlchemy, OpenPyXL, gspread, Polars, DuckDB, Plotly |
+| BSD-3-Clause | pandas, python-dotenv, JupyterHub/JupyterLab, NumPy, Seaborn, scikit-learn |
 | LGPL-2.1+ | psycopg2 |
 | PostgreSQL License | PostgreSQL |
 | AGPL-3.0 | MinIO Server |
+| PSF-based | Matplotlib |
 
 ## Full License Texts
 

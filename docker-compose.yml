@@ -127,6 +127,49 @@ services:
       timeout: 5s
       retries: 5
 
+  jupyter:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.jupyter
+    container_name: elt-jupyter
+    restart: unless-stopped
+    environment:
+      JUPYTER_PORT: "${JUPYTER_PORT:-8888}"
+      JUPYTER_USERNAME: "${JUPYTER_USERNAME:-jovyan}"
+      JUPYTER_PASSWORD: "${JUPYTER_PASSWORD:?Defina JUPYTER_PASSWORD no .env}"
+      POSTGRES_HOST: elt-postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-elt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PYSPARK_PYTHON: python
+      PYSPARK_DRIVER_PYTHON: python
+    ports:
+      - "127.0.0.1:${JUPYTER_PORT:-8888}:8888"
+    volumes:
+      - ./data_lab:/home/jovyan/work/Data Lab
+      - ./README.md:/home/jovyan/work/ELT/README.md:ro
+      - ./THIRD_PARTY_NOTICES.md:/home/jovyan/work/ELT/THIRD_PARTY_NOTICES.md:ro
+      - ./src:/home/jovyan/work/ELT/src:ro
+      - ./models:/home/jovyan/work/ELT/models:ro
+      - ./controller:/home/jovyan/work/ELT/controller:ro
+      - ./sql:/home/jovyan/work/ELT/sql:ro
+      - ./main.py:/home/jovyan/work/ELT/main.py:ro
+      - ./pyproject.toml:/home/jovyan/work/ELT/pyproject.toml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8888/login | grep -qi 'password' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   elt-pgdata:
   elt-miniodata:
