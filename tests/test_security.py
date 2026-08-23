@@ -35,7 +35,6 @@ _configure = _security.configure_allowed_internals
 _classify_ip = _security._classify_ip
 _safe_remove = _security._safe_remove
 ALLOWED_SCHEMES = _security.ALLOWED_SCHEMES
-IPBoundHTTPSAdapter = _security.IPBoundHTTPSAdapter
 
 PUBLIC_IP = "93.184.216.34"
 
@@ -48,14 +47,14 @@ def _mock_getaddrinfo(ip: str = PUBLIC_IP):
     )
 
 
-def _mock_do_request(resp=None, side_effect=None):
-    """Patch _do_request to return *resp* without any network calls."""
+def _mock_requests_request(resp=None, side_effect=None):
+    """Patch requests.request to return *resp* without any network calls."""
     kwargs: dict = {}
     if resp is not None:
         kwargs["return_value"] = resp
     if side_effect is not None:
         kwargs["side_effect"] = side_effect
-    return patch.object(_security, "_do_request", **kwargs)
+    return patch.object(_security.requests, "request", **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +335,7 @@ class TestSafeRequest:
         mock_resp = MagicMock()
         mock_resp.is_redirect = False
         mock_resp.status_code = 200
-        with _mock_do_request(mock_resp) as m:
+        with _mock_requests_request(mock_resp) as m:
             resp = safe_request("GET", "https://example.com")
             m.assert_called_once()
             assert resp is mock_resp
@@ -347,10 +346,14 @@ class TestSafeRequest:
         r1.headers = {"Location": "http://127.0.0.1/secret"}
         r1.close = MagicMock()
 
-        with patch.object(_security, "validate_url", side_effect=SecurityError("blocked")):
-            with _mock_do_request(r1):
+        with _mock_requests_request(r1):
+            with patch.object(
+                _security, "validate_url",
+                side_effect=SecurityError("blocked by SSRF check"),
+            ):
                 with pytest.raises(SecurityError, match="blocked"):
                     safe_request("GET", "https://example.com")
+        r1.close.assert_called()
 
     def test_redirect_followed(self):
         r1 = MagicMock()
@@ -362,9 +365,10 @@ class TestSafeRequest:
         r2.is_redirect = False
         r2.status_code = 200
 
-        with _mock_do_request(side_effect=[r1, r2]):
-            resp = safe_request("GET", "https://example.com")
-            assert resp is r2
+        with _mock_requests_request(side_effect=[r1, r2]):
+            with patch.object(_security, "validate_url", return_value="ok"):
+                resp = safe_request("GET", "https://example.com")
+                assert resp is r2
 
     def test_relative_redirect_resolved(self):
         r1 = MagicMock()
@@ -376,11 +380,12 @@ class TestSafeRequest:
         r2.is_redirect = False
         r2.status_code = 200
 
-        with _mock_do_request(side_effect=[r1, r2]) as m:
-            resp = safe_request("GET", "https://example.com/api/v1/data")
-            assert resp is r2
-            second_call_url = m.call_args_list[1][0][1]
-            assert second_call_url == "https://example.com/api/v2/data"
+        with _mock_requests_request(side_effect=[r1, r2]) as m:
+            with patch.object(_security, "validate_url", return_value="ok"):
+                resp = safe_request("GET", "https://example.com/api/v1/data")
+                assert resp is r2
+                second_call_url = m.call_args_list[1][0][1]
+                assert second_call_url == "https://example.com/api/v2/data"
 
     def test_too_many_redirects(self):
         r = MagicMock()
@@ -388,45 +393,10 @@ class TestSafeRequest:
         r.headers = {"Location": "https://example.com/loop"}
         r.close = MagicMock()
 
-        with _mock_do_request(r):
-            with pytest.raises(SecurityError, match="Too many redirects"):
-                safe_request("GET", "https://example.com", max_redirects=2)
-
-    def test_redirect_rebinding_detected(self):
-        r1 = MagicMock()
-        r1.is_redirect = True
-        r1.headers = {"Location": "https://example.com/other"}
-        r1.close = MagicMock()
-
-        with _mock_do_request(r1):
-            with patch.object(_security, "validate_url"):
-                with patch.object(
-                    _security, "resolve_and_check_host",
-                    return_value=["1.2.3.4"],
-                ):
-                    with pytest.raises(SecurityError, match="DNS rebinding"):
-                        safe_request(
-                            "GET", "https://example.com",
-                            resolved_ips=["5.6.7.8"],
-                        )
-
-    def test_cross_host_redirect_not_rebinding(self):
-        """Redirect to a different public host is NOT rebinding."""
-        r1 = MagicMock()
-        r1.is_redirect = True
-        r1.headers = {"Location": "https://other.com/data"}
-        r1.close = MagicMock()
-
-        r2 = MagicMock()
-        r2.is_redirect = False
-        r2.status_code = 200
-
-        with _mock_do_request(side_effect=[r1, r2]):
-            resp = safe_request(
-                "GET", "https://example.com",
-                resolved_ips=["93.184.216.34"],
-            )
-            assert resp is r2
+        with _mock_requests_request(r):
+            with patch.object(_security, "validate_url", return_value="ok"):
+                with pytest.raises(SecurityError, match="Too many redirects"):
+                    safe_request("GET", "https://example.com", max_redirects=2)
 
     def test_response_closed_on_validation_error(self):
         r1 = MagicMock()
@@ -434,10 +404,14 @@ class TestSafeRequest:
         r1.headers = {"Location": "https://evil.com/x"}
         r1.close = MagicMock()
 
-        with _mock_do_request(r1):
-            with pytest.raises(SecurityError):
-                safe_request("GET", "https://example.com")
-            r1.close.assert_called()
+        with _mock_requests_request(r1):
+            with patch.object(
+                _security, "validate_url",
+                side_effect=SecurityError("blocked"),
+            ):
+                with pytest.raises(SecurityError, match="blocked"):
+                    safe_request("GET", "https://example.com")
+        r1.close.assert_called()
 
     def test_current_url_updates_each_hop(self):
         """After a redirect, the current URL used for urljoin is updated."""
@@ -455,20 +429,14 @@ class TestSafeRequest:
         r3.is_redirect = False
         r3.status_code = 200
 
-        with _mock_do_request(side_effect=[r1, r2, r3]) as m:
-            resp = safe_request("GET", "https://example.com/page1", max_redirects=5)
-            assert resp is r3
-            assert m.call_args_list[1][0][1] == "https://example.com/page2"
-            assert m.call_args_list[2][0][1] == "https://example.com/page3"
-
-
-# ---------------------------------------------------------------------------
-# IPBoundHTTPSAdapter
-# ---------------------------------------------------------------------------
-class TestIPBoundAdapter:
-    def test_adapter_saves_ip(self):
-        adapter = IPBoundHTTPSAdapter("1.2.3.4")
-        assert adapter._resolved_ip == "1.2.3.4"
+        with _mock_requests_request(side_effect=[r1, r2, r3]) as m:
+            with patch.object(_security, "validate_url", return_value="ok"):
+                resp = safe_request(
+                    "GET", "https://example.com/page1", max_redirects=5
+                )
+                assert resp is r3
+                assert m.call_args_list[1][0][1] == "https://example.com/page2"
+                assert m.call_args_list[2][0][1] == "https://example.com/page3"
 
 
 # ---------------------------------------------------------------------------
@@ -486,44 +454,48 @@ class TestStreamDownloadToFile:
 
     def test_writes_to_file(self):
         mock_resp = MagicMock()
-        mock_resp.is_redirect = False
         mock_resp.status_code = 200
         mock_resp.headers = {"Content-Type": "text/csv", "Content-Length": "5"}
         mock_resp.iter_content.return_value = [b"hello"]
         mock_resp.close = MagicMock()
         mock_resp.raise_for_status = MagicMock()
 
-        with _mock_do_request(mock_resp):
-            path = stream_download_to_file("https://example.com/data.csv")
-            try:
-                assert os.path.exists(path)
-                with open(path, "rb") as f:
-                    assert f.read() == b"hello"
-            finally:
-                _safe_remove(path)
+        with _mock_getaddrinfo(PUBLIC_IP):
+            with patch.object(_security, "safe_request", return_value=mock_resp):
+                path = stream_download_to_file("https://example.com/data.csv")
+                try:
+                    assert os.path.exists(path)
+                    with open(path, "rb") as f:
+                        assert f.read() == b"hello"
+                finally:
+                    _safe_remove(path)
 
     def test_content_length_exceeded(self):
         mock_resp = MagicMock()
-        mock_resp.is_redirect = False
+        mock_resp.status_code = 200
         mock_resp.headers = {"Content-Length": "999999999"}
         mock_resp.close = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
 
-        with _mock_do_request(mock_resp):
-            with pytest.raises(SecurityError, match="Content-Length"):
-                stream_download_to_file(
-                    "https://example.com/big.bin", max_bytes=1000
-                )
+        with _mock_getaddrinfo(PUBLIC_IP):
+            with patch.object(_security, "safe_request", return_value=mock_resp):
+                with pytest.raises(SecurityError, match="Content-Length"):
+                    stream_download_to_file(
+                        "https://example.com/big.bin", max_bytes=1000
+                    )
 
     def test_cleanup_on_error(self):
         mock_resp = MagicMock()
-        mock_resp.is_redirect = False
+        mock_resp.status_code = 200
         mock_resp.headers = {}
         mock_resp.iter_content.side_effect = IOError("network error")
         mock_resp.close = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
 
-        with _mock_do_request(mock_resp):
-            with pytest.raises(IOError):
-                stream_download_to_file("https://example.com/fail.csv")
+        with _mock_getaddrinfo(PUBLIC_IP):
+            with patch.object(_security, "safe_request", return_value=mock_resp):
+                with pytest.raises(IOError):
+                    stream_download_to_file("https://example.com/fail.csv")
 
 
 # ---------------------------------------------------------------------------

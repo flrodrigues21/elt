@@ -1,8 +1,24 @@
 """Shared security utilities for ELT extractors.
 
 Provides path traversal protection, SSRF mitigation with internal host
-allowlisting, manual redirect following, DNS rebinding protection via
-IP-bound connections, file-based streaming downloads, and safe ZIP extraction.
+allowlisting, manual redirect following, file-based streaming downloads,
+and safe ZIP extraction.
+
+**Residual risk – DNS rebinding / TOCTOU:**
+``validate_url`` resolves and checks the target IP immediately before each
+call, but ``requests`` (via urllib3) performs its own DNS resolution when
+opening the TCP connection.  Between validation and connection a DNS rebinding
+attack could theoretically redirect the request to a different (blocked) IP.
+This is an inherent limitation of using a high-level HTTP library that manages
+its own connection pool.  For environments that require absolute assurance
+against DNS rebinding, use one or more of:
+
+* **Egress firewall / proxy:** restrict outbound connections to an allowlist
+  of IPs or CIDRs.
+* **DNS sinkhole / split-horizon DNS:** resolve internal-only names via a
+  controlled resolver.
+* **Domain allowlist at the proxy level:** the proxy validates the destination
+  before forwarding.
 """
 from __future__ import annotations
 
@@ -21,8 +37,6 @@ from typing import Sequence
 from urllib.parse import urljoin, urlparse
 
 import requests
-import requests.adapters
-import urllib3.connection
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +45,7 @@ ALLOWED_SCHEMES = frozenset({"http", "https"})
 # ---------------------------------------------------------------------------
 # Configurable defaults
 # ---------------------------------------------------------------------------
-DEFAULT_MAX_BYTES = 500 * 1024 * 1024  # 500 MB – conservative default
+DEFAULT_MAX_BYTES = 500 * 1024 * 1024  # 500 MB
 DEFAULT_MAX_ZIP_BYTES = 200 * 1024 * 1024  # 200 MB compressed
 DEFAULT_MAX_UNCOMPRESSED_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB decompressed
 DEFAULT_MAX_FILES = 200
@@ -83,59 +97,6 @@ def _load_allowlist_from_env() -> None:
             len(_ALLOWED_INTERNAL_HOSTS),
             len(_ALLOWED_INTERNAL_CIDRS),
         )
-
-
-# ---------------------------------------------------------------------------
-# IP-bound connection adapter (DNS rebinding protection)
-# ---------------------------------------------------------------------------
-
-_original_create_connection = socket.create_connection
-_create_conn_lock = threading.Lock()
-
-
-def _ip_bound_create_connection(
-    ip: str,
-):
-    """Return a socket.create_connection replacement bound to *ip*."""
-
-    def _create(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None, /, **kwargs):  # type: ignore[assignment]
-        host, port = address
-        return _original_create_connection(
-            (ip, port), timeout=timeout, source_address=source_address
-        )
-
-    return _create
-
-
-class IPBoundHTTPSAdapter(requests.adapters.HTTPAdapter):
-    """HTTPAdapter that routes TCP connections to a pre-resolved IP.
-
-    Preserves the original hostname for TLS SNI and the Host header
-    (both are set by urllib3/requests using the URL, not the socket).
-    The TCP layer connects to the validated *resolved_ip*, preventing
-    DNS rebinding between validation and connection.
-
-    .. note::
-
-       This adapter overrides ``socket.create_connection`` for the duration
-       of each ``send()`` call.  It is safe for single-threaded Airflow
-       task execution.  If concurrent requests share the same process and
-       call ``safe_request`` simultaneously, the lock inside ``send()``
-       ensures correctness.
-    """
-
-    def __init__(self, resolved_ip: str, **kwargs):
-        self._resolved_ip = resolved_ip
-        super().__init__(**kwargs)
-
-    def send(self, request, *args, **kwargs):  # noqa: ANN001
-        bound = _ip_bound_create_connection(self._resolved_ip)
-        with _create_conn_lock:
-            socket.create_connection = bound
-            try:
-                return super().send(request, *args, **kwargs)
-            finally:
-                socket.create_connection = _original_create_connection
 
 
 class SecurityError(Exception):
@@ -234,7 +195,6 @@ def resolve_and_check_host(hostname: str) -> list[str]:
 
     hostname_lower = hostname.lower()
     if hostname_lower in hosts_copy:
-        # Allowlisted host – resolve but skip IP classification.
         try:
             infos = socket.getaddrinfo(
                 hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM
@@ -286,7 +246,7 @@ def is_same_host(url: str, base_url: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Manual redirect following with SSRF checks and IP-bound connections
+# Manual redirect following with SSRF checks
 # ---------------------------------------------------------------------------
 
 def safe_request(
@@ -295,33 +255,28 @@ def safe_request(
     *,
     max_redirects: int = DEFAULT_MAX_REDIRECTS,
     timeout: int = DEFAULT_TIMEOUT,
-    resolved_ips: list[str] | None = None,
     **kwargs,
 ) -> requests.Response:
     """Issue an HTTP request with disabled automatic redirects.
 
     Each ``30x`` response is followed manually up to *max_redirects* hops.
-    Every ``Location`` URL is validated (scheme, host, DNS) before following.
+    Every ``Location`` URL is fully validated (scheme + DNS) before following.
     Relative redirects are resolved with ``urljoin`` against the current URL.
 
-    *resolved_ips*, when provided, enables DNS rebinding detection: the
-    redirect target's resolved IPs must match the original set.  When the
-    IPs match, an :class:`IPBoundHTTPSAdapter` is mounted so the TCP
-    connection goes to the validated IP while preserving the hostname for
-    TLS SNI and Host header.
-
     The previous response is closed in all code paths (including errors).
+
+    .. note::
+
+       There is an inherent TOCTOU window between DNS validation and the
+       actual TCP connection made by ``requests``.  See module docstring
+       for mitigations against DNS rebinding in high-security environments.
     """
     current_url = url
     resp = None
 
     try:
-        resp = _do_request(
-            method,
-            current_url,
-            resolved_ips=resolved_ips,
-            timeout=timeout,
-            **kwargs,
+        resp = requests.request(
+            method, current_url, allow_redirects=False, timeout=timeout, **kwargs
         )
 
         hops = 0
@@ -330,37 +285,13 @@ def safe_request(
             if not location:
                 break
 
-            # Resolve relative redirects against current URL
             next_url = urljoin(current_url, location)
-
             validate_url(next_url)
-
-            # DNS rebinding detection
-            next_parsed = urlparse(next_url)
-            if resolved_ips is not None and next_parsed.hostname:
-                new_ips = resolve_and_check_host(next_parsed.hostname)
-                # Only flag rebinding if host changed AND IPs differ.
-                # A legitimate redirect to a different public host is not
-                # rebinding – we just re-validate and continue.
-                current_parsed = urlparse(current_url)
-                if (
-                    next_parsed.hostname.lower() == current_parsed.hostname.lower()
-                    and set(new_ips) != set(resolved_ips)
-                ):
-                    raise SecurityError(
-                        "DNS rebinding detected: redirect resolved to "
-                        f"{new_ips}, expected {resolved_ips}"
-                    )
-                resolved_ips = new_ips
 
             resp.close()
             current_url = next_url
-            resp = _do_request(
-                method,
-                current_url,
-                resolved_ips=resolved_ips,
-                timeout=timeout,
-                **kwargs,
+            resp = requests.request(
+                method, current_url, allow_redirects=False, timeout=timeout, **kwargs
             )
             hops += 1
 
@@ -375,36 +306,6 @@ def safe_request(
         if resp is not None:
             resp.close()
         raise
-
-
-def _do_request(
-    method: str,
-    url: str,
-    *,
-    resolved_ips: list[str] | None = None,
-    timeout: int,
-    **kwargs,
-) -> requests.Response:
-    """Issue a single request, optionally using an IP-bound adapter."""
-    parsed = urlparse(url)
-    hostname = parsed.hostname
-
-    if resolved_ips and hostname:
-        # Resolve fresh to get current IPs
-        current_ips = resolve_and_check_host(hostname)
-        ip = current_ips[0]
-        session = requests.Session()
-        adapter = IPBoundHTTPSAdapter(resolved_ip=ip)
-        session.mount(f"https://{hostname}", adapter)
-        session.mount(f"http://{hostname}", adapter)
-        resp = session.request(
-            method, url, allow_redirects=False, timeout=timeout, **kwargs
-        )
-    else:
-        resp = requests.request(
-            method, url, allow_redirects=False, timeout=timeout, **kwargs
-        )
-    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -427,8 +328,6 @@ def stream_download_to_file(
     Raises SecurityError on scheme/host/size violations.
     """
     validate_url(url)
-    parsed = urlparse(url)
-    resolved_ips = resolve_and_check_host(parsed.hostname) if parsed.hostname else None
 
     resp = safe_request(
         "GET",
@@ -436,7 +335,6 @@ def stream_download_to_file(
         max_redirects=max_redirects,
         timeout=timeout,
         stream=True,
-        resolved_ips=resolved_ips,
     )
     resp.raise_for_status()
 

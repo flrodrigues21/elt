@@ -18,7 +18,6 @@ from elt.src.extractors._security import (
     SecurityError,
     safe_request,
     sanitize_filename,
-    stream_download_to_file,
     unique_temp_path,
     validate_url,
 )
@@ -71,14 +70,18 @@ class ApiExtractor(BaseExtractor):
             },
             timeout=30,
         )
-        resp.raise_for_status()
-        data = resp.json()
-        token = data.get("token")
-        if not token:
-            raise ValueError(f"Resposta de login nao contem campo 'token': {data}")
-
-        logger.info(f"API [{self.source_connection}] Token obtido com sucesso")
-        return token
+        try:
+            resp.raise_for_status()
+            data = resp.json()
+            token = data.get("token")
+            if not token:
+                raise ValueError(
+                    f"Resposta de login nao contem campo 'token': {data}"
+                )
+            logger.info(f"API [{self.source_connection}] Token obtido com sucesso")
+            return token
+        finally:
+            resp.close()
 
     def _build_url(self, endpoint: str = None) -> str:
         base = self.base_url.rstrip("/")
@@ -153,7 +156,6 @@ class ApiExtractor(BaseExtractor):
         content_disposition = response.headers.get("Content-Disposition", "")
         max_bytes = self._get_max_download_bytes()
 
-        # Check Content-Length before reading body
         content_length = response.headers.get("Content-Length")
         if content_length:
             try:
@@ -166,7 +168,6 @@ class ApiExtractor(BaseExtractor):
             except (ValueError, TypeError):
                 pass
 
-        # JSON / text → stream via iter_content, enforce size limit
         if "application/json" in content_type or "text" in content_type:
             try:
                 raw = self._stream_response(response, max_bytes)
@@ -185,7 +186,6 @@ class ApiExtractor(BaseExtractor):
             finally:
                 response.close()
 
-        # Attachment → stream to unique temp file (large)
         if "attachment" in content_disposition or "filename" in content_disposition:
             filename = self._parse_filename(content_disposition)
             safe_name = sanitize_filename(filename or "download.bin")
@@ -195,7 +195,9 @@ class ApiExtractor(BaseExtractor):
             try:
                 total = 0
                 with open(tmp_path, "wb") as f:
-                    for chunk in response.iter_content(chunk_size=DEFAULT_STREAM_CHUNK):
+                    for chunk in response.iter_content(
+                        chunk_size=DEFAULT_STREAM_CHUNK
+                    ):
                         total += len(chunk)
                         if total > max_bytes:
                             raise SecurityError(
@@ -214,7 +216,6 @@ class ApiExtractor(BaseExtractor):
                 [{"file_path": tmp_path, "filename": safe_name}]
             )
 
-        # Fallback: raw content via iter_content, enforce size limit
         try:
             raw = self._stream_response(response, max_bytes)
             return pd.DataFrame(
@@ -234,6 +235,12 @@ class ApiExtractor(BaseExtractor):
 
     @staticmethod
     def _raise_for_status(response: requests.Response, url: str) -> None:
+        """Check status and raise ValueError on client/server errors.
+
+        The caller is responsible for closing the response in a ``finally``
+        block.  This method does **not** close the response so that the
+        caller can still read headers/body if needed before closing.
+        """
         if response.status_code == 401:
             raise ValueError(
                 f"Autenticacao falhou para {url}: "

@@ -1,7 +1,14 @@
-"""pytest conftest — make the local checkout importable as 'elt'."""
+"""pytest conftest — make the local checkout importable as 'elt'.
+
+Also installs an autouse fixture that blocks any real DNS resolution or TCP
+connection so every test is fully isolated from the network.
+"""
 import importlib
 import pathlib
 import sys
+from unittest.mock import patch
+
+import pytest
 
 _project_root = pathlib.Path(__file__).resolve().parent.parent
 
@@ -20,3 +27,30 @@ if _dir_name != "elt" and "elt" not in sys.modules:
     mod = importlib.util.module_from_spec(spec)
     sys.modules["elt"] = mod
     spec.loader.exec_module(mod)
+
+
+# ---------------------------------------------------------------------------
+# Autouse fixture: block ALL real DNS and network access
+# ---------------------------------------------------------------------------
+
+def _fail_getaddrinfo(*args, **kwargs):
+    raise AssertionError(
+        "UNMOCKED socket.getaddrinfo call — test is not isolated. "
+        "Mock socket.getaddrinfo or resolve_and_check_host in your test."
+    )
+
+
+def _fail_create_connection(*args, **kwargs):
+    raise AssertionError(
+        "UNMOCKED socket.create_connection call — test is not isolated."
+    )
+
+
+@pytest.fixture(autouse=True)
+def _block_real_network():
+    """Prevent any real DNS resolution or TCP connection during tests."""
+    with (
+        patch("socket.getaddrinfo", side_effect=_fail_getaddrinfo),
+        patch("socket.create_connection", side_effect=_fail_create_connection),
+    ):
+        yield
