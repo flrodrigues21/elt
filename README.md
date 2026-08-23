@@ -43,21 +43,24 @@ cd elt
 
 ## O que e cada componente
 
-| Componente | Papel no projeto |
-|-----------|-----------------|
-| **Python 3.12** | Linguagem dos extractors, conectores e controller |
-| **PostgreSQL 16** | Banco relacional para todas as camadas (bronze/silver/gold/elt/airflow) |
-| **Apache Airflow 2.9.3** | Orquestrador de DAGs: executa, agenda e monitora pipelines ELT |
-| **Docker / Docker Compose** | Empacota e orquestra todos os servicos com um unico comando |
-| **MinIO** | Object storage S3-compativel para datalake em formato Parquet |
-| **MinIO SDK (minio-py)** | Cliente Python para upload/download de objetos no MinIO |
-| **SQLAlchemy** | Conexao com PostgreSQL/Oracle via pool de conexoes |
-| **pandas / PyArrow** | Manipulacao de dados e suporte a Parquet |
-| **OpenPyXL** | Leitura/escrita de arquivos Excel (.xlsx) |
-| **Requests** | HTTP client para APIs REST e downloads de CSV |
-| **psycopg2** | Adaptador nativo PostgreSQL para Python |
-| **python-oracledb** | Driver Oracle (modo Thin, sem Oracle Client) |
-| **Google Sheets APIs** | Extractor para planilhas Google Sheets via service account |
+| Componente | O que e | Papel no projeto | Onde e usado | Licenca | Links |
+|-----------|---------|-----------------|-------------|---------|-------|
+| **Python 3.12** | Linguagem de programacao interpretada | Linguagem dos extractors, conectores e controller | Todo o codigo-fonte do projeto | PSF License | [python.org](https://www.python.org/) \| [License](https://docs.python.org/3/license.html) |
+| **PostgreSQL 16** | Sistema de gerenciamento de banco relacional | Banco para todas as camadas (bronze/silver/gold/elt/airflow) | `docker-compose.yml` (servico postgres) | PostgreSQL License | [postgresql.org](https://www.postgresql.org/) \| [License](https://www.postgresql.org/about/licence/) |
+| **Apache Airflow 2.9.3** | Orquestrador de workflows (DAGs) | Executa, agenda e monitora pipelines ELT | `docker-compose.yml` (servicos airflow-*) | Apache 2.0 | [airflow.apache.org](https://airflow.apache.org/) \| [License](https://www.apache.org/licenses/LICENSE-2.0) |
+| **Docker** | Plataforma de containerizacao | Empacota servicos em containers isolados | Infraestrutura base do lab | Apache 2.0 | [docker.com](https://www.docker.com/) \| [License](https://github.com/moby/moby/blob/master/LICENSE) |
+| **Docker Compose** | Orquestrador multi-container | Define e gerencia todos os servicos com um comando | `docker-compose.yml` | Apache 2.0 | [docs.docker.com/compose](https://docs.docker.com/compose/) \| [License](https://github.com/docker/compose/blob/main/LICENSE) |
+| **MinIO** | Object storage S3-compativel | Datalake em formato Parquet (camada bronze/silver/gold) | `docker-compose.yml` (servico minio), `src/extractors/minio.py` | AGPL-3.0 | [min.io](https://min.io/) \| [License](https://github.com/minio/minio/blob/master/LICENSE) |
+| **MinIO SDK (minio-py)** | Cliente Python para API S3 do MinIO | Upload/download de objetos Parquet no datalake | `src/connectors/minio_connector.py` | Apache 2.0 | [min.io/docs/minio/python](https://min.io/docs/minio/linux/developers/python/API.html) \| [License](https://github.com/minio/minio-py/blob/master/LICENSE) |
+| **SQLAlchemy** | Toolkit ORM e SQL para Python | Conexao com PostgreSQL/Oracle via pool de conexoes | `src/connectors/postgres_connector.py`, `src/connectors/oracle_connector.py` | MIT | [sqlalchemy.org](https://www.sqlalchemy.org/) \| [License](https://github.com/sqlalchemy/sqlalchemy/blob/main/LICENSE) |
+| **pandas** | Biblioteca de manipulacao de dados tabulares | Leitura, transformacao e escrita de DataFrames | `src/extractors/*.py`, `src/models/` | BSD-3-Clause | [pandas.pydata.org](https://pandas.pydata.org/) \| [License](https://github.com/pandas-dev/pandas/blob/main/LICENSE) |
+| **PyArrow** | Implementacao Apache Arrow para Python | Suporte a formato Parquet e vetores columnares | `src/extractors/s3.py` (leitura parquet) | Apache 2.0 | [arrow.apache.org/docs/python](https://arrow.apache.org/docs/python/) \| [License](https://github.com/apache/arrow/blob/main/LICENSE.txt) |
+| **OpenPyXL** | Leitura/escrita de arquivos Excel (.xlsx) | Extracao de dados de planilhas Excel | `src/extractors/xlsx.py` | MIT | [openpyxl.readthedocs.io](https://openpyxl.readthedocs.io/) \| [License](https://openpyxl.readthedocs.io/en/stable/license.html) |
+| **Requests** | HTTP client para Python | Chamadas a APIs REST e downloads de CSV | `src/extractors/api.py`, `src/extractors/s3.py`, `src/extractors/_security.py` | Apache 2.0 | [requests.readthedocs.io](https://requests.readthedocs.io/) \| [License](https://github.com/psf/requests/blob/main/LICENSE) |
+| **psycopg2** | Adaptador nativo PostgreSQL para Python | Conexao direta com PostgreSQL via libpq | `src/connectors/postgres_connector.py` | LGPL-2.1+ | [ycopg.org](https://www.psycopg.org/) \| [License](https://www.psycopg.org/docs/copyright.html) |
+| **python-oracledb** | Driver Oracle para Python (modo Thin) | Conexao com Oracle sem Oracle Client | `src/connectors/oracle_connector.py` | Apache 2.0 | [oracle.github.io/python-oracledb](https://oracle.github.io/python-oracledb/) \| [License](https://github.com/oracle/python-oracledb/blob/main/LICENSE.txt) |
+| **google-api-python-client** | Cliente Python para Google APIs | Acesso ao Google Sheets API v4 | `src/extractors/google_sheets.py` | Apache 2.0 | [github.com/googleapis/google-api-python-client](https://github.com/googleapis/google-api-python-client) \| [License](https://github.com/googleapis/google-api-python-client/blob/main/LICENSE) |
+| **gspread** | Wrapper Python para Google Sheets | Abstracao simplificada do Sheets API | `src/extractors/google_sheets.py` | MIT | [github.com/burnash/gspread](https://github.com/burnash/gspread) \| [License](https://github.com/burnash/gspread/blob/master/LICENSE) |
 
 ---
 
@@ -367,15 +370,21 @@ minuto hora dia_do_mes mes dia_da_semana
 
 ## Gerenciamento de Dependencias
 
-- **Imagens Docker:** Todas fixadas com tag de versao (nao `:latest`)
-- **Python (requirements-airflow.txt):** Versoes especificadas sem upper bound para
-  permitir resolucao pelo constraint do Airflow 2.9.3
-- **Airflow constraints:** O Airflow resolve dependencias usando constraints oficiais
-  da versao 2.9.3, garantindo compatibilidade entre providers e SDKs
+- **Imagens Docker:** Todas fixadas com tag de versao. MinIO tambem fixado por digest SHA-256
+- **Python (requirements-airflow.txt):** Versoes sem upper bound, resolvidas via constraints oficiais
+- **Airflow constraints:** `Dockerfile.airflow` usa constraints oficiais da versao 2.9.3
+  (`constraints-3.11.txt`), garantindo compatibilidade entre providers e SDKs
 - **Dependabot:** Configurado em `.github/dependabot.yml` para monitorar atualizacoes
   semanais de pip e Docker
 - **Security:** `src/extractors/_security.py` fornece protecao contra path traversal,
-  SSRF, DNS rebinding e limits de download
+  SSRF, DNS rebinding (adapter IP-bound), e limits de download
+
+### Pendencias registradas
+
+- [ ] **pip-audit:** Adicionar etapa `pip-audit --desc` ao pipeline CI para varredura
+  periodica de vulnerabilidades nas dependencias Python
+- [ ] **SBOM CycloneDX:** Integrar geracao de SBOM (`cyclonedx-py`) no CI/CD para
+  rastreabilidade completa de componentes de software
 
 ---
 

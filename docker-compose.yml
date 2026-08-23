@@ -109,7 +109,7 @@ services:
         condition: service_healthy
 
   minio:
-    image: minio/minio:RELEASE.2024-09-22T00-33-43Z
+    image: minio/minio:RELEASE.2024-09-22T00-33-43Z@sha256:abe32ef927c0b13b693356c17ca48bb6a79729021b4b8a2dd46714fb2336ca98
     container_name: elt-minio
     restart: unless-stopped
     environment:

@@ -1,8 +1,8 @@
 """Shared security utilities for ELT extractors.
 
 Provides path traversal protection, SSRF mitigation with internal host
-allowlisting, manual redirect following, DNS rebinding protection,
-file-based streaming downloads, and safe ZIP extraction.
+allowlisting, manual redirect following, DNS rebinding protection via
+IP-bound connections, file-based streaming downloads, and safe ZIP extraction.
 """
 from __future__ import annotations
 
@@ -11,16 +11,18 @@ import ipaddress
 import logging
 import os
 import re
-import shutil
 import socket
 import tempfile
+import threading
 import uuid
 import zipfile
 from pathlib import Path
 from typing import Sequence
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
+import requests.adapters
+import urllib3.connection
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +41,12 @@ DEFAULT_MAX_REDIRECTS = 5
 
 # ---------------------------------------------------------------------------
 # Internal host / CIDR allowlist
-# Set at module load or via configure_allowed_internals().
+# Configurable via env vars at startup or via configure_allowed_internals().
 # ---------------------------------------------------------------------------
 _ALLOWED_INTERNAL_HOSTS: set[str] = set()
 _ALLOWED_INTERNAL_CIDRS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+
+_LOCK = threading.Lock()
 
 
 def configure_allowed_internals(
@@ -52,12 +56,86 @@ def configure_allowed_internals(
 ) -> None:
     """Configure hosts and/or CIDRs that are permitted internal targets.
 
-    Call once at startup (e.g. from airflow.cfg or env vars).  When a URL
-    target resolves to one of these, it bypasses the private/metadata block.
+    Thread-safe.  When a URL target resolves to one of these, it bypasses
+    the private/metadata block.
     """
     global _ALLOWED_INTERNAL_HOSTS, _ALLOWED_INTERNAL_CIDRS
-    _ALLOWED_INTERNAL_HOSTS = set(h.lower() for h in (hosts or []))
-    _ALLOWED_INTERNAL_CIDRS = [ipaddress.ip_network(c, strict=False) for c in (cidrs or [])]
+    with _LOCK:
+        _ALLOWED_INTERNAL_HOSTS = set(h.lower() for h in (hosts or []))
+        _ALLOWED_INTERNAL_CIDRS = [
+            ipaddress.ip_network(c, strict=False) for c in (cidrs or [])
+        ]
+
+
+def _load_allowlist_from_env() -> None:
+    """Load allowlist from ELT_ALLOWED_INTERNAL_HOSTS / ELT_ALLOWED_INTERNAL_CIDRS.
+
+    Called once at module load.  Comma-separated values.
+    """
+    hosts_str = os.environ.get("ELT_ALLOWED_INTERNAL_HOSTS", "")
+    cidrs_str = os.environ.get("ELT_ALLOWED_INTERNAL_CIDRS", "")
+    hosts = [h.strip() for h in hosts_str.split(",") if h.strip()]
+    cidrs = [c.strip() for c in cidrs_str.split(",") if c.strip()]
+    if hosts or cidrs:
+        configure_allowed_internals(hosts=hosts, cidrs=cidrs)
+        logger.info(
+            "Security allowlist loaded from env: %d host(s), %d CIDR(s)",
+            len(_ALLOWED_INTERNAL_HOSTS),
+            len(_ALLOWED_INTERNAL_CIDRS),
+        )
+
+
+# ---------------------------------------------------------------------------
+# IP-bound connection adapter (DNS rebinding protection)
+# ---------------------------------------------------------------------------
+
+_original_create_connection = socket.create_connection
+_create_conn_lock = threading.Lock()
+
+
+def _ip_bound_create_connection(
+    ip: str,
+):
+    """Return a socket.create_connection replacement bound to *ip*."""
+
+    def _create(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None, /, **kwargs):  # type: ignore[assignment]
+        host, port = address
+        return _original_create_connection(
+            (ip, port), timeout=timeout, source_address=source_address
+        )
+
+    return _create
+
+
+class IPBoundHTTPSAdapter(requests.adapters.HTTPAdapter):
+    """HTTPAdapter that routes TCP connections to a pre-resolved IP.
+
+    Preserves the original hostname for TLS SNI and the Host header
+    (both are set by urllib3/requests using the URL, not the socket).
+    The TCP layer connects to the validated *resolved_ip*, preventing
+    DNS rebinding between validation and connection.
+
+    .. note::
+
+       This adapter overrides ``socket.create_connection`` for the duration
+       of each ``send()`` call.  It is safe for single-threaded Airflow
+       task execution.  If concurrent requests share the same process and
+       call ``safe_request`` simultaneously, the lock inside ``send()``
+       ensures correctness.
+    """
+
+    def __init__(self, resolved_ip: str, **kwargs):
+        self._resolved_ip = resolved_ip
+        super().__init__(**kwargs)
+
+    def send(self, request, *args, **kwargs):  # noqa: ANN001
+        bound = _ip_bound_create_connection(self._resolved_ip)
+        with _create_conn_lock:
+            socket.create_connection = bound
+            try:
+                return super().send(request, *args, **kwargs)
+            finally:
+                socket.create_connection = _original_create_connection
 
 
 class SecurityError(Exception):
@@ -104,7 +182,9 @@ def unique_temp_path(suffix: str = ".tmp", prefix: str = "elt_") -> str:
 
 def _ip_in_allowlisted_network(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """Check if *ip* falls within any configured ALLOWED_INTERNAL_CIDRS."""
-    for net in _ALLOWED_INTERNAL_CIDRS:
+    with _LOCK:
+        cidrs = list(_ALLOWED_INTERNAL_CIDRS)
+    for net in cidrs:
         if ip in net:
             return True
     return False
@@ -141,19 +221,19 @@ def _classify_ip(addr: str, hostname: str) -> str | None:
         if _ip_in_allowlisted_network(ip):
             return None  # explicitly allowed
         return f"private address {addr} (not in internal allowlist)"
-    # Cloud metadata endpoints (169.254.169.254) are link-local, caught above.
     return None
 
 
 def resolve_and_check_host(hostname: str) -> list[str]:
     """Resolve hostname and reject disallowed IPs.
 
-    Returns the list of resolved IP strings.  For DNS rebinding protection,
-    callers should verify that a second resolution at request-time still
-    matches these IPs.
+    Returns the list of resolved IP strings.
     """
+    with _LOCK:
+        hosts_copy = set(_ALLOWED_INTERNAL_HOSTS)
+
     hostname_lower = hostname.lower()
-    if hostname_lower in _ALLOWED_INTERNAL_HOSTS:
+    if hostname_lower in hosts_copy:
         # Allowlisted host – resolve but skip IP classification.
         try:
             infos = socket.getaddrinfo(
@@ -206,7 +286,7 @@ def is_same_host(url: str, base_url: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Manual redirect following with SSRF checks
+# Manual redirect following with SSRF checks and IP-bound connections
 # ---------------------------------------------------------------------------
 
 def safe_request(
@@ -218,52 +298,112 @@ def safe_request(
     resolved_ips: list[str] | None = None,
     **kwargs,
 ) -> requests.Response:
-    """Issue an HTTP request with *disabled* automatic redirects.
+    """Issue an HTTP request with disabled automatic redirects.
 
     Each ``30x`` response is followed manually up to *max_redirects* hops.
     Every ``Location`` URL is validated (scheme, host, DNS) before following.
+    Relative redirects are resolved with ``urljoin`` against the current URL.
 
     *resolved_ips*, when provided, enables DNS rebinding detection: the
-    redirect target's resolved IPs must match the original set.
+    redirect target's resolved IPs must match the original set.  When the
+    IPs match, an :class:`IPBoundHTTPSAdapter` is mounted so the TCP
+    connection goes to the validated IP while preserving the hostname for
+    TLS SNI and Host header.
+
+    The previous response is closed in all code paths (including errors).
     """
-    resp = requests.request(
-        method, url, allow_redirects=False, timeout=timeout, **kwargs
-    )
+    current_url = url
+    resp = None
 
-    hops = 0
-    while resp.is_redirect and hops < max_redirects:
-        next_url = resp.headers.get("Location", "")
-        if not next_url:
-            break
-        # Handle relative redirects
-        if next_url.startswith("/"):
-            parsed_orig = urlparse(url)
-            next_url = f"{parsed_orig.scheme}://{parsed_orig.netloc}{next_url}"
+    try:
+        resp = _do_request(
+            method,
+            current_url,
+            resolved_ips=resolved_ips,
+            timeout=timeout,
+            **kwargs,
+        )
 
-        validate_url(next_url)
+        hops = 0
+        while resp.is_redirect and hops < max_redirects:
+            location = resp.headers.get("Location", "")
+            if not location:
+                break
 
-        # DNS rebinding: verify resolved IP hasn't changed
-        if resolved_ips is not None:
-            parsed_next = urlparse(next_url)
-            if parsed_next.hostname:
-                new_ips = resolve_and_check_host(parsed_next.hostname)
-                if set(new_ips) != set(resolved_ips):
+            # Resolve relative redirects against current URL
+            next_url = urljoin(current_url, location)
+
+            validate_url(next_url)
+
+            # DNS rebinding detection
+            next_parsed = urlparse(next_url)
+            if resolved_ips is not None and next_parsed.hostname:
+                new_ips = resolve_and_check_host(next_parsed.hostname)
+                # Only flag rebinding if host changed AND IPs differ.
+                # A legitimate redirect to a different public host is not
+                # rebinding – we just re-validate and continue.
+                current_parsed = urlparse(current_url)
+                if (
+                    next_parsed.hostname.lower() == current_parsed.hostname.lower()
+                    and set(new_ips) != set(resolved_ips)
+                ):
                     raise SecurityError(
                         "DNS rebinding detected: redirect resolved to "
                         f"{new_ips}, expected {resolved_ips}"
                     )
+                resolved_ips = new_ips
 
-        resp.close()
+            resp.close()
+            current_url = next_url
+            resp = _do_request(
+                method,
+                current_url,
+                resolved_ips=resolved_ips,
+                timeout=timeout,
+                **kwargs,
+            )
+            hops += 1
+
+        if hops >= max_redirects and resp.is_redirect:
+            raise SecurityError(
+                f"Too many redirects (>{max_redirects}) from {url}"
+            )
+
+        return resp
+
+    except BaseException:
+        if resp is not None:
+            resp.close()
+        raise
+
+
+def _do_request(
+    method: str,
+    url: str,
+    *,
+    resolved_ips: list[str] | None = None,
+    timeout: int,
+    **kwargs,
+) -> requests.Response:
+    """Issue a single request, optionally using an IP-bound adapter."""
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+
+    if resolved_ips and hostname:
+        # Resolve fresh to get current IPs
+        current_ips = resolve_and_check_host(hostname)
+        ip = current_ips[0]
+        session = requests.Session()
+        adapter = IPBoundHTTPSAdapter(resolved_ip=ip)
+        session.mount(f"https://{hostname}", adapter)
+        session.mount(f"http://{hostname}", adapter)
+        resp = session.request(
+            method, url, allow_redirects=False, timeout=timeout, **kwargs
+        )
+    else:
         resp = requests.request(
-            method, next_url, allow_redirects=False, timeout=timeout, **kwargs
+            method, url, allow_redirects=False, timeout=timeout, **kwargs
         )
-        hops += 1
-
-    if hops >= max_redirects and resp.is_redirect:
-        raise SecurityError(
-            f"Too many redirects (>{max_redirects}) from {url}"
-        )
-
     return resp
 
 
@@ -369,6 +509,10 @@ def safe_zip_extract(
 ) -> list[str]:
     """Extract a ZIP archive safely.
 
+    *data* can be ``bytes`` (in-memory) or a ``str`` file path.  When a file
+    path is given the ZIP is read lazily via ``ZipFile(path)`` without loading
+    the entire archive into memory.
+
     * Prevents path traversal via ``basename()`` + ``is_safe_path()``.
     * Detects ZIP bombs via compressed-size, uncompressed-size, and file-count limits.
     * Prevents name collisions when multiple entries flatten to the same basename
@@ -378,77 +522,120 @@ def safe_zip_extract(
 
     Returns list of extracted file paths.
     """
-    if isinstance(data, str):
-        with open(data, "rb") as f:
-            data = f.read()
-
-    if len(data) > max_compressed_bytes:
-        raise SecurityError(
-            f"ZIP data ({len(data)} bytes) exceeds compressed size limit "
-            f"({max_compressed_bytes})"
-        )
-
     extracted: list[str] = []
     used_names: dict[str, int] = {}
 
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            # Pre-scan: validate sizes before writing anything.
-            total_uncompressed = 0
-            file_count = 0
-            for info in zf.infolist():
-                if info.is_dir():
-                    continue
-                file_count += 1
-                total_uncompressed += info.file_size
-                if total_uncompressed > max_uncompressed_bytes:
-                    raise SecurityError(
-                        f"ZIP uncompressed content exceeds limit "
-                        f"({max_uncompressed_bytes} bytes)"
-                    )
-            if file_count > max_files:
+        if isinstance(data, str):
+            file_size = os.path.getsize(data)
+            if file_size > max_compressed_bytes:
                 raise SecurityError(
-                    f"ZIP contains {file_count} files, limit is {max_files}"
+                    f"ZIP file ({file_size} bytes) exceeds compressed size limit "
+                    f"({max_compressed_bytes})"
                 )
-
-            # Extract with collision-safe naming.
-            total_written = 0
-            for info in zf.infolist():
-                if info.is_dir():
-                    continue
-
-                base = sanitize_filename(os.path.basename(info.filename))
-                if base in used_names:
-                    used_names[base] += 1
-                    stem, ext = os.path.splitext(base)
-                    base = f"{stem}_{used_names[base]}{ext}"
-                else:
-                    used_names[base] = 0
-
-                target = os.path.join(dest_dir, base)
-                if not is_safe_path(dest_dir, target):
-                    raise SecurityError(
-                        f"ZIP entry '{info.filename}' escapes extraction directory"
-                    )
-
-                with zf.open(info) as src, open(target, "wb") as dst:
-                    while True:
-                        buf = src.read(DEFAULT_STREAM_CHUNK)
-                        if not buf:
-                            break
-                        total_written += len(buf)
-                        if total_written > max_uncompressed_bytes:
-                            raise SecurityError(
-                                f"ZIP written bytes ({total_written}) exceeds "
-                                f"limit ({max_uncompressed_bytes})"
-                            )
-                        dst.write(buf)
-                extracted.append(target)
+            _extract_from_file(data, dest_dir, extracted, used_names,
+                               max_files, max_uncompressed_bytes)
+        else:
+            if len(data) > max_compressed_bytes:
+                raise SecurityError(
+                    f"ZIP data ({len(data)} bytes) exceeds compressed size limit "
+                    f"({max_compressed_bytes})"
+                )
+            _extract_from_bytes(data, dest_dir, extracted, used_names,
+                                max_files, max_uncompressed_bytes)
 
     except BaseException:
-        # Cleanup on any failure
         for p in extracted:
             _safe_remove(p)
         raise
 
     return extracted
+
+
+def _pre_scan_zip(zf: zipfile.ZipFile, max_files: int, max_uncompressed_bytes: int) -> None:
+    """Pre-scan ZIP entries to detect bombs before writing anything."""
+    total_uncompressed = 0
+    file_count = 0
+    for info in zf.infolist():
+        if info.is_dir():
+            continue
+        file_count += 1
+        total_uncompressed += info.file_size
+        if total_uncompressed > max_uncompressed_bytes:
+            raise SecurityError(
+                f"ZIP uncompressed content exceeds limit "
+                f"({max_uncompressed_bytes} bytes)"
+            )
+    if file_count > max_files:
+        raise SecurityError(
+            f"ZIP contains {file_count} files, limit is {max_files}"
+        )
+
+
+def _extract_entries(
+    zf: zipfile.ZipFile,
+    dest_dir: str,
+    extracted: list[str],
+    used_names: dict[str, int],
+    max_uncompressed_bytes: int,
+) -> None:
+    """Extract entries from an open ZipFile with collision-safe naming."""
+    total_written = 0
+    for info in zf.infolist():
+        if info.is_dir():
+            continue
+
+        base = sanitize_filename(os.path.basename(info.filename))
+        if base in used_names:
+            used_names[base] += 1
+            stem, ext = os.path.splitext(base)
+            base = f"{stem}_{used_names[base]}{ext}"
+        else:
+            used_names[base] = 0
+
+        target = os.path.join(dest_dir, base)
+        if not is_safe_path(dest_dir, target):
+            raise SecurityError(
+                f"ZIP entry '{info.filename}' escapes extraction directory"
+            )
+
+        with zf.open(info) as src, open(target, "wb") as dst:
+            while True:
+                buf = src.read(DEFAULT_STREAM_CHUNK)
+                if not buf:
+                    break
+                total_written += len(buf)
+                if total_written > max_uncompressed_bytes:
+                    raise SecurityError(
+                        f"ZIP written bytes ({total_written}) exceeds "
+                        f"limit ({max_uncompressed_bytes})"
+                    )
+                dst.write(buf)
+        extracted.append(target)
+
+
+def _extract_from_bytes(
+    data: bytes,
+    dest_dir: str,
+    extracted: list[str],
+    used_names: dict[str, int],
+    max_files: int,
+    max_uncompressed_bytes: int,
+) -> None:
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        _pre_scan_zip(zf, max_files, max_uncompressed_bytes)
+        _extract_entries(zf, dest_dir, extracted, used_names, max_uncompressed_bytes)
+
+
+def _extract_from_file(
+    path: str,
+    dest_dir: str,
+    extracted: list[str],
+    used_names: dict[str, int],
+    max_files: int,
+    max_uncompressed_bytes: int,
+) -> None:
+    """Open ZIP from file path without loading entire content into memory."""
+    with zipfile.ZipFile(path) as zf:
+        _pre_scan_zip(zf, max_files, max_uncompressed_bytes)
+        _extract_entries(zf, dest_dir, extracted, used_names, max_uncompressed_bytes)

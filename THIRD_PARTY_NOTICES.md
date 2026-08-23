@@ -1,51 +1,136 @@
 # Third-Party Notices
 
 This project uses third-party software packages. The following notices are provided
-in accordance with the respective licenses.
+in accordance with the respective licenses. **This document is for informational
+purposes only and does not constitute legal advice.** Consult a qualified attorney
+for guidance on license compliance in your specific context.
 
-## Apache Airflow
+## Component Notices
+
+### Apache Airflow
 
 - **Website:** https://airflow.apache.org
+- **Repository:** https://github.com/apache/airflow
 - **License:** Apache License 2.0
+- **License Text:** https://www.apache.org/licenses/LICENSE-2.0
 - **Usage:** Workflow orchestration (webserver, scheduler, init)
 - **Image:** `apache/airflow:2.9.3-python3.11`
 
-## PostgreSQL
+### PostgreSQL
 
 - **Website:** https://www.postgresql.org
-- **License:** PostgreSQL License (similar to MIT/BSD)
-- **Usage:** Primary relational database
+- **Repository:** https://github.com/postgres/postgres
+- **License:** PostgreSQL License (liberal, similar to MIT/BSD)
+- **License Text:** https://www.postgresql.org/about/licence/
+- **Usage:** Primary relational database (5 databases: elt, bronze, silver, gold, airflow)
 - **Image:** `postgres:16-alpine`
 
-## MinIO
+### MinIO (Server)
 
 - **Website:** https://min.io
+- **Repository:** https://github.com/minio/minio
 - **License:** GNU Affero General Public License v3.0 (AGPL-3.0)
+- **License Text:** https://www.gnu.org/licenses/agpl-3.0.html
 - **Usage:** S3-compatible object storage for parquet data lake
 - **Image:** `minio/minio:RELEASE.2024-09-22T00-33-43Z`
 
-> **Note:** MinIO uses AGPL-3.0. If you distribute or make available over a network
-> a modified version of MinIO, you must provide the corresponding source code under
-> AGPL-3.0. Running unmodified MinIO as an internal service (without distributing
-> the MinIO binaries or modified source) does **not** trigger this obligation.
-> This project does not modify MinIO; it is used as a stock Docker image only.
+> **AGPL-3.0 Advisory:**
+> MinIO's AGPL-3.0 license requires that if you **modify** MinIO and make the
+> modified version available to users over a network, you must offer the
+> complete corresponding source code under AGPL-3.0 terms. Running
+> **unmodified** MinIO as an internal service (without distributing modified
+> MinIO binaries or source) does **not** trigger this obligation. This project
+> does not modify MinIO; it is used as a stock Docker image only. However,
+> AGPL compliance depends on your specific deployment and usage — consult
+> legal counsel if you are unsure.
 
-## Python Dependencies (requirements-airflow.txt)
+### MinIO SDK (minio-py)
 
-| Package | License | Description |
-|---------|---------|-------------|
-| python-dotenv | BSD-3-Clause | Load .env files |
-| google-auth | Apache-2.0 | Google authentication |
-| google-api-python-client | Apache-2.0 | Google API client |
-| gspread | MIT | Google Sheets API wrapper |
-| openpyxl | MIT | Excel file reader/writer |
-| pandas | BSD-3-Clause | Data manipulation |
-| psycopg2-binary | LGPL-2.1+ | PostgreSQL adapter |
-| SQLAlchemy | MIT | SQL toolkit and ORM |
-| requests | Apache-2.0 | HTTP client library |
-| pyarrow | Apache-2.0 | Apache Arrow / Parquet support |
-| minio | Apache-2.0 | MinIO S3-compatible client |
-| oracledb | Apache-2.0 | Oracle database driver |
+- **Website:** https://min.io
+- **Repository:** https://github.com/minio/minio-py
+- **License:** Apache License 2.0
+- **License Text:** https://github.com/minio/minio-py/blob/master/LICENSE
+- **Usage:** Python client for MinIO S3-compatible API (upload/download parquet objects)
+
+### SQLAlchemy
+
+- **Website:** https://www.sqlalchemy.org
+- **Repository:** https://github.com/sqlalchemy/sqlalchemy
+- **License:** MIT License
+- **License Text:** https://github.com/sqlalchemy/sqlalchemy/blob/main/LICENSE
+- **Usage:** Database connectivity via connection pooling (PostgreSQL, Oracle)
+
+### pandas
+
+- **Website:** https://pandas.pydata.org
+- **Repository:** https://github.com/pandas-dev/pandas
+- **License:** BSD-3-Clause
+- **License Text:** https://github.com/pandas-dev/pandas/blob/main/LICENSE
+- **Usage:** DataFrame manipulation for all extractors and transforms
+
+### PyArrow
+
+- **Website:** https://arrow.apache.org
+- **Repository:** https://github.com/apache/arrow
+- **License:** Apache License 2.0
+- **License Text:** https://github.com/apache/arrow/blob/main/LICENSE.txt
+- **Usage:** Parquet file format support for MinIO datalake
+
+### OpenPyXL
+
+- **Website:** https://openpyxl.readthedocs.io
+- **Repository:** https://github.com/openpyxl/openpyxl
+- **License:** MIT License
+- **License Text:** https://openpyxl.readthedocs.io/en/stable/license.html
+- **Usage:** Excel (.xlsx) file reading/writing
+
+### Requests
+
+- **Website:** https://requests.readthedocs.io
+- **Repository:** https://github.com/psf/requests
+- **License:** Apache License 2.0
+- **License Text:** https://github.com/psf/requests/blob/main/LICENSE
+- **Usage:** HTTP client for REST API extraction and CSV downloads
+
+### psycopg2-binary
+
+- **Website:** https://www.psycopg.org
+- **Repository:** https://github.com/psycopg/psycopg2
+- **License:** LGPL-2.1+ (or later)
+- **License Text:** https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+- **Usage:** PostgreSQL adapter for Python (native, via libpq)
+
+### python-oracledb
+
+- **Website:** https://oracle.github.io/python-oracledb
+- **Repository:** https://github.com/oracle/python-oracledb
+- **License:** Apache License 2.0
+- **License Text:** https://github.com/oracle/python-oracledb/blob/main/LICENSE.txt
+- **Usage:** Oracle database driver (Thin mode, no Oracle Client required)
+
+### google-api-python-client
+
+- **Website:** https://github.com/googleapis/google-api-python-client
+- **Repository:** https://github.com/googleapis/google-api-python-client
+- **License:** Apache License 2.0
+- **License Text:** https://github.com/googleapis/google-api-python-client/blob/main/LICENSE
+- **Usage:** Google Sheets API v4 client
+
+### gspread
+
+- **Website:** https://github.com/burnash/gspread
+- **Repository:** https://github.com/burnash/gspread
+- **License:** MIT License
+- **License Text:** https://github.com/burnash/gspread/blob/master/LICENSE
+- **Usage:** Google Sheets API wrapper (simplified interface)
+
+### python-dotenv
+
+- **Website:** https://github.com/theskumar/python-dotenv
+- **Repository:** https://github.com/theskumar/python-dotenv
+- **License:** BSD-3-Clause
+- **License Text:** https://github.com/theskumar/python-dotenv/blob/main/LICENSE
+- **Usage:** Load environment variables from .env files
 
 ## System Packages (Dockerfile.airflow)
 
@@ -54,7 +139,18 @@ in accordance with the respective licenses.
 | build-essential | GPL-2.0+ (collection) | Compilers and make |
 | libpq-dev | PostgreSQL License | PostgreSQL development headers |
 
-## Licenses
+## License Summary
+
+| License | Components |
+|---------|-----------|
+| Apache 2.0 | Airflow, PyArrow, Requests, python-oracledb, minio-py, google-api-python-client |
+| MIT | SQLAlchemy, OpenPyXL, gspread |
+| BSD-3-Clause | pandas, python-dotenv |
+| LGPL-2.1+ | psycopg2 |
+| PostgreSQL License | PostgreSQL |
+| AGPL-3.0 | MinIO Server |
+
+## Full License Texts
 
 ### Apache License 2.0
 
@@ -96,14 +192,19 @@ SOFTWARE.
 
 ### GNU Affero General Public License v3.0
 
-MinIO is licensed under AGPL-3.0. For details, see:
+MinIO Server is licensed under AGPL-3.0. For the full license text, see:
 https://www.gnu.org/licenses/agpl-3.0.html
 
 ### GNU Lesser General Public License v2.1+
 
-psycopg2 is licensed under LGPL-2.1+ (or later). For details, see:
+psycopg2 is licensed under LGPL-2.1+ (or later). For the full license text, see:
 https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
 
 ---
+
+**Disclaimer:** This document is provided for informational purposes only. It is
+not legal advice and should not be relied upon as such. License obligations depend
+on how each component is used, modified, and distributed in your specific context.
+Consult a qualified attorney for guidance on open-source license compliance.
 
 **Generated:** 2026-08-22

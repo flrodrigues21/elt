@@ -10,7 +10,10 @@ Configuracao via schedule (coluna config - JSONB):
     "compression": "zip",
     "header_row": 1,
     "file_extension": ".csv",
-    "max_download_bytes": 524288000
+    "max_download_bytes": 524288000,
+    "max_zip_bytes": 209715200,
+    "max_uncompressed_bytes": 1073741824,
+    "max_zip_files": 200
 }
 """
 import csv
@@ -72,20 +75,32 @@ class S3Extractor(BaseExtractor):
     def _extract_zip(
         self, zip_path: str, encoding: str, delimiter: str, config: dict
     ) -> pd.DataFrame:
-        with open(zip_path, "rb") as f:
-            zip_data = f.read()
+        max_zip_bytes = config.get("max_zip_bytes", 200 * 1024 * 1024)
+        max_uncompressed = config.get("max_uncompressed_bytes", 1 * 1024 * 1024 * 1024)
+        max_files = config.get("max_zip_files", 200)
 
         tmp_dir = unique_temp_path(suffix="").rstrip(".")
         os.makedirs(tmp_dir, exist_ok=True)
 
+        extracted: list[str] = []
         try:
-            extracted = safe_zip_extract(zip_data, tmp_dir)
+            extracted = safe_zip_extract(
+                zip_path,
+                tmp_dir,
+                max_files=max_files,
+                max_compressed_bytes=max_zip_bytes,
+                max_uncompressed_bytes=max_uncompressed,
+            )
             csv_files = [f for f in extracted if f.endswith(".csv")]
             if not csv_files:
                 raise ValueError("ZIP nao contem arquivos .csv")
 
             with open(csv_files[0], encoding=encoding) as f:
                 raw = f.read()
+        except SecurityError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"Erro ao extrair ZIP: {exc}") from exc
         finally:
             for p in extracted:
                 try:

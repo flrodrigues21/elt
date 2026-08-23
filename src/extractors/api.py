@@ -2,19 +2,20 @@
 
 Single request per attempt.  Preserves method, auth, headers, params, body.
 Streams attachment downloads directly to a unique temp file.  Redirects are
-followed manually with SSRF validation on each hop.
+followed manually with SSRF validation on each hop.  JSON/text/raw responses
+are size-limited and streamed via iter_content.
 """
+import json
 import logging
 import os
-import tempfile
 
 import pandas as pd
 import requests
 
 from elt.src.connectors.airflow_connections import AirflowConnector
 from elt.src.extractors._security import (
+    DEFAULT_STREAM_CHUNK,
     SecurityError,
-    is_safe_path,
     safe_request,
     sanitize_filename,
     stream_download_to_file,
@@ -85,6 +86,25 @@ class ApiExtractor(BaseExtractor):
         return f"{base}/{ep}"
 
     # ------------------------------------------------------------------
+    def _get_max_download_bytes(self) -> int:
+        return int(self.config.get("max_download_bytes", 500 * 1024 * 1024))
+
+    def _stream_response(self, response: requests.Response, max_bytes: int) -> bytes:
+        """Stream response body via iter_content, enforcing *max_bytes*.
+
+        Returns the complete body as bytes.  Caller must close *response*.
+        """
+        total = 0
+        chunks: list[bytes] = []
+        for chunk in response.iter_content(chunk_size=DEFAULT_STREAM_CHUNK):
+            total += len(chunk)
+            if total > max_bytes:
+                raise SecurityError(
+                    f"Response body exceeded size limit ({max_bytes} bytes)"
+                )
+            chunks.append(chunk)
+        return b"".join(chunks)
+
     def extract(self, row: dict) -> pd.DataFrame:
         url = self._build_url()
         validate_url(url)
@@ -103,8 +123,6 @@ class ApiExtractor(BaseExtractor):
 
         logger.info(f"API [{self.source_connection}] {self.method} {url}")
 
-        # Single request (no allow_redirects to keep control; safe_request
-        # handles redirects manually).
         response = safe_request(
             self.method,
             url,
@@ -115,9 +133,6 @@ class ApiExtractor(BaseExtractor):
             timeout=30,
         )
 
-        # Handle 401 with token refresh – still a single *additional* request
-        # (the re-auth request + one data request = max 2 requests total for
-        # the token path, which is the minimum necessary).
         if response.status_code == 401 and self.auth_type == "token":
             logger.info("Token expirado, reautenticando...")
             self.token = self._authenticate_token()
@@ -136,21 +151,39 @@ class ApiExtractor(BaseExtractor):
 
         content_type = response.headers.get("Content-Type", "")
         content_disposition = response.headers.get("Content-Disposition", "")
+        max_bytes = self._get_max_download_bytes()
 
-        # JSON / text → read in memory (small)
+        # Check Content-Length before reading body
+        content_length = response.headers.get("Content-Length")
+        if content_length:
+            try:
+                if int(content_length) > max_bytes:
+                    response.close()
+                    raise SecurityError(
+                        f"Content-Length ({content_length}) exceeds limit "
+                        f"({max_bytes})"
+                    )
+            except (ValueError, TypeError):
+                pass
+
+        # JSON / text → stream via iter_content, enforce size limit
         if "application/json" in content_type or "text" in content_type:
             try:
-                data = response.json()
+                raw = self._stream_response(response, max_bytes)
+                try:
+                    data = json.loads(raw.decode("utf-8", errors="replace"))
+                except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                    raise ValueError(f"Resposta invalida (nao e JSON/texto): {exc}")
+                if isinstance(data, list):
+                    return pd.DataFrame(data)
+                if isinstance(data, dict):
+                    documents = data.get("documents", [])
+                    if documents:
+                        return pd.DataFrame(documents)
+                    return pd.DataFrame([data])
+                return pd.DataFrame([data])
             finally:
                 response.close()
-            if isinstance(data, list):
-                return pd.DataFrame(data)
-            if isinstance(data, dict):
-                documents = data.get("documents", [])
-                if documents:
-                    return pd.DataFrame(documents)
-                return pd.DataFrame([data])
-            return pd.DataFrame([data])
 
         # Attachment → stream to unique temp file (large)
         if "attachment" in content_disposition or "filename" in content_disposition:
@@ -160,16 +193,19 @@ class ApiExtractor(BaseExtractor):
                 suffix=os.path.splitext(safe_name)[1] or ".bin"
             )
             try:
-                max_bytes = self.config.get("max_download_bytes", 500 * 1024 * 1024)
                 total = 0
                 with open(tmp_path, "wb") as f:
-                    for chunk in response.iter_content(chunk_size=256 * 1024):
+                    for chunk in response.iter_content(chunk_size=DEFAULT_STREAM_CHUNK):
                         total += len(chunk)
                         if total > max_bytes:
                             raise SecurityError(
                                 f"Download exceeded size limit ({max_bytes} bytes)"
                             )
                         f.write(chunk)
+            except BaseException:
+                from elt.src.extractors._security import _safe_remove
+                _safe_remove(tmp_path)
+                raise
             finally:
                 response.close()
 
@@ -178,14 +214,14 @@ class ApiExtractor(BaseExtractor):
                 [{"file_path": tmp_path, "filename": safe_name}]
             )
 
-        # Fallback: raw content
+        # Fallback: raw content via iter_content, enforce size limit
         try:
-            raw = response.content
+            raw = self._stream_response(response, max_bytes)
+            return pd.DataFrame(
+                [{"raw_content": raw, "status_code": response.status_code}]
+            )
         finally:
             response.close()
-        return pd.DataFrame(
-            [{"raw_content": raw, "status_code": response.status_code}]
-        )
 
     # ------------------------------------------------------------------
     @staticmethod
