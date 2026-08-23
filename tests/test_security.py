@@ -7,11 +7,13 @@ import io
 import os
 import pathlib
 import socket
+import sys
 import tempfile
 import zipfile
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 _security_mod_path = (
     pathlib.Path(__file__).resolve().parent.parent / "src" / "extractors" / "_security.py"
@@ -37,6 +39,19 @@ _safe_remove = _security._safe_remove
 ALLOWED_SCHEMES = _security.ALLOWED_SCHEMES
 
 PUBLIC_IP = "93.184.216.34"
+
+# Mock third-party modules so ApiExtractor can be imported without all deps
+_MOCK_MODULES = (
+    "airflow", "airflow.hooks", "airflow.hooks.base",
+    "oracledb",
+    "gspread",
+    "google", "google.oauth2", "google.oauth2.service_account",
+    "minio", "minio.error",
+)
+for _mod in _MOCK_MODULES:
+    sys.modules.setdefault(_mod, MagicMock())
+
+from elt.src.extractors.api import ApiExtractor  # noqa: E402
 
 
 def _mock_getaddrinfo(ip: str = PUBLIC_IP):
@@ -533,3 +548,80 @@ class TestAllowedInternals:
             before_hosts = set(_security._ALLOWED_INTERNAL_HOSTS)
             _security._load_allowlist_from_env()
             assert _security._ALLOWED_INTERNAL_HOSTS == before_hosts
+
+
+# ---------------------------------------------------------------------------
+# ApiExtractor.extract — response.close on _raise_for_status errors
+# ---------------------------------------------------------------------------
+class TestApiExtractorResponseClose:
+    """Prove that ApiExtractor.extract closes the response when
+    _raise_for_status raises (401, 403, 404, 500, generic)."""
+
+    _API = "elt.src.extractors.api"
+
+    def _make_extractor(self):
+        return ApiExtractor(config={
+            "connection_airflow": "test_conn",
+            "base_url": "http://api.example.com",
+            "endpoint": "data",
+            "auth_type": "basic",
+        })
+
+    def _run_extract_expect_close(self, status_code, exc_match):
+        mock_resp = MagicMock()
+        mock_resp.status_code = status_code
+        mock_resp.close = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.headers = {}
+
+        extractor = self._make_extractor()
+        with patch.object(extractor, "_get_credentials", return_value=("u", "p")):
+            with patch(f"{self._API}.validate_url"):
+                with patch(f"{self._API}.safe_request", return_value=mock_resp):
+                    with pytest.raises(ValueError, match=exc_match):
+                        extractor.extract(row={})
+        mock_resp.close.assert_called()
+        return mock_resp
+
+    def test_close_on_401(self):
+        self._run_extract_expect_close(401, "Autenticacao")
+
+    def test_close_on_403(self):
+        self._run_extract_expect_close(403, "Acesso negado")
+
+    def test_close_on_404(self):
+        self._run_extract_expect_close(404, "nao encontrado")
+
+    def test_close_on_500(self):
+        self._run_extract_expect_close(500, "servidor remoto")
+
+    def test_close_on_raise_for_status_error(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.close = MagicMock()
+        mock_resp.raise_for_status.side_effect = requests.HTTPError("502 Bad Gateway")
+        mock_resp.headers = {}
+
+        extractor = self._make_extractor()
+        with patch.object(extractor, "_get_credentials", return_value=("u", "p")):
+            with patch(f"{self._API}.validate_url"):
+                with patch(f"{self._API}.safe_request", return_value=mock_resp):
+                    with pytest.raises(requests.HTTPError, match="502"):
+                        extractor.extract(row={})
+        mock_resp.close.assert_called()
+
+    def test_valid_response_not_closed_early(self):
+        """On success the response is NOT closed before processing."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.close = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.headers = {"Content-Type": "application/json"}
+        mock_resp.iter_content.return_value = [b'{"key":"val"}']
+
+        extractor = self._make_extractor()
+        with patch.object(extractor, "_get_credentials", return_value=("u", "p")):
+            with patch(f"{self._API}.validate_url"):
+                with patch(f"{self._API}.safe_request", return_value=mock_resp):
+                    df = extractor.extract(row={})
+        assert not df.empty

@@ -150,7 +150,11 @@ class ApiExtractor(BaseExtractor):
                 timeout=30,
             )
 
-        self._raise_for_status(response, url)
+        try:
+            self._raise_for_status(response, url)
+        except BaseException:
+            response.close()
+            raise
 
         content_type = response.headers.get("Content-Type", "")
         content_disposition = response.headers.get("Content-Disposition", "")

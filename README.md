@@ -377,7 +377,10 @@ minuto hora dia_do_mes mes dia_da_semana
 - **Dependabot:** Configurado em `.github/dependabot.yml` para monitorar atualizacoes
   semanais de pip e Docker
 - **Security:** `src/extractors/_security.py` fornece protecao contra path traversal,
-  SSRF, DNS rebinding (adapter IP-bound), e limits de download
+  SSRF (validacao de esquema, IP, allowlist de hosts/CIDRs e redirects manuais
+  com urljoin), e limites de download. DNS rebinding/TOCTOU e um risco residual
+  documentado no modulo — para ambientes de alta seguranca, use firewall de egress,
+  proxy ou allowlist de dominios
 
 ### Pendencias registradas
 
