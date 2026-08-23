@@ -104,19 +104,27 @@ if (-not (Test-Path $envFile)) {
 
         $pgPass = New-SecureString 24
         $airflowPass = New-SecureString 20
+        $minioUser = New-SecureString 16
+        $minioPass = New-SecureString 24
         $fernetKey = New-FernetKey
 
         $lines = Get-Content $envFile
         for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match '^POSTGRES_PASSWORD=')       { $lines[$i] = "POSTGRES_PASSWORD=$pgPass" }
-            elseif ($lines[$i] -match '^AIRFLOW_ADMIN_PASSWORD=') { $lines[$i] = "AIRFLOW_ADMIN_PASSWORD=$airflowPass" }
-            elseif ($lines[$i] -match '^AIRFLOW_FERNET_KEY=')     { $lines[$i] = "AIRFLOW_FERNET_KEY=$fernetKey" }
+            if ($lines[$i] -match '^POSTGRES_PASSWORD=')           { $lines[$i] = "POSTGRES_PASSWORD=$pgPass" }
+            elseif ($lines[$i] -match '^AIRFLOW_ADMIN_PASSWORD=')  { $lines[$i] = "AIRFLOW_ADMIN_PASSWORD=$airflowPass" }
+            elseif ($lines[$i] -match '^AIRFLOW_FERNET_KEY=')      { $lines[$i] = "AIRFLOW_FERNET_KEY=$fernetKey" }
+            elseif ($lines[$i] -match '^MINIO_ROOT_USER=')         { $lines[$i] = "MINIO_ROOT_USER=$minioUser" }
+            elseif ($lines[$i] -match '^MINIO_ROOT_PASSWORD=')     { $lines[$i] = "MINIO_ROOT_PASSWORD=$minioPass" }
+            elseif ($lines[$i] -match '^MINIO_ACCESS_KEY=')        { $lines[$i] = "MINIO_ACCESS_KEY=$minioUser" }
+            elseif ($lines[$i] -match '^MINIO_SECRET_KEY=')        { $lines[$i] = "MINIO_SECRET_KEY=$minioPass" }
         }
         $lines | Set-Content $envFile
 
         Write-Host ".env criado em: $envFile" -ForegroundColor Green
         Write-Host "  POSTGRES_PASSWORD: gerado (24 caracteres)" -ForegroundColor DarkGray
         Write-Host "  AIRFLOW_ADMIN_PASSWORD: gerado (20 caracteres)" -ForegroundColor DarkGray
+        Write-Host "  MINIO_ROOT_USER/ACCESS_KEY: gerado (16 caracteres)" -ForegroundColor DarkGray
+        Write-Host "  MINIO_ROOT_PASSWORD/SECRET_KEY: gerado (24 caracteres)" -ForegroundColor DarkGray
         Write-Host "  AIRFLOW_FERNET_KEY: gerado" -ForegroundColor DarkGray
         Write-Host "  (valores completos nao exibidos por seguranca)" -ForegroundColor DarkGray
     } else {

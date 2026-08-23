@@ -9,15 +9,19 @@ Configuracao via schedule (coluna config - JSONB):
     "secure": false
 }
 """
-
 import logging
 import os
-import tempfile
 from typing import Optional
 
 import pandas as pd
 from minio import Minio
 
+from elt.src.extractors._security import (
+    _safe_remove,
+    is_safe_path,
+    sanitize_filename,
+    unique_temp_path,
+)
 from elt.src.extractors.base import BaseExtractor
 
 logger = logging.getLogger(__name__)
@@ -46,7 +50,6 @@ class MinioExtractor(BaseExtractor):
 
         bucket = config.get("bucket", os.getenv("MINIO_BUCKET", "cnes-bronze"))
         object_name = config.get("object_name", "")
-        endpoint = config.get("endpoint", os.getenv("MINIO_ENDPOINT"))
 
         if not object_name:
             url = row.get("url", "")
@@ -60,24 +63,22 @@ class MinioExtractor(BaseExtractor):
 
         client = self._conectar(config)
 
-        tmp = os.path.join(
-            tempfile.gettempdir(),
-            object_name.replace("/", "_")
-        )
+        # Unique temp path – no collision between DAGs
+        ext = os.path.splitext(object_name)[1] or ".parquet"
+        tmp_path = unique_temp_path(suffix=ext)
 
         logger.info(f"Baixando minio://{bucket}/{object_name}")
-        client.fget_object(bucket, object_name, tmp)
+        client.fget_object(bucket, object_name, tmp_path)
 
         try:
             if object_name.endswith(".parquet"):
-                df = pd.read_parquet(tmp)
+                df = pd.read_parquet(tmp_path)
             elif object_name.endswith(".csv"):
-                df = pd.read_csv(tmp)
+                df = pd.read_csv(tmp_path)
             else:
-                df = pd.read_parquet(tmp)
+                df = pd.read_parquet(tmp_path)
 
             logger.info(f"Extraidos {len(df)} registros do MinIO")
             return df
         finally:
-            if os.path.exists(tmp):
-                os.remove(tmp)
+            _safe_remove(tmp_path)

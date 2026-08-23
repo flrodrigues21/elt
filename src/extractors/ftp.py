@@ -13,22 +13,29 @@ Configuracao via schedule (coluna config - JSONB):
     "file_pattern": "*.csv",
     "file_format": "csv",
     "encoding": "utf-8",
-    "max_files": 10
+    "max_files": 10,
+    "max_download_bytes": 524288000
 }
 """
-
 import ftplib
 import logging
 import os
 import re
-import tempfile
 from typing import Optional
 
 import pandas as pd
 
+from elt.src.extractors._security import (
+    SecurityError,
+    is_safe_path,
+    sanitize_filename,
+    unique_temp_path,
+)
 from elt.src.extractors.base import BaseExtractor
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_MAX_FTP_BYTES = 500 * 1024 * 1024  # 500 MB
 
 
 class FTPExtractor(BaseExtractor):
@@ -43,6 +50,9 @@ class FTPExtractor(BaseExtractor):
         self.file_format = config.get("file_format", "csv")
         self.encoding = config.get("encoding", "utf-8")
         self.max_files = int(config.get("max_files", 0))
+        self.max_download_bytes = int(
+            config.get("max_download_bytes", DEFAULT_MAX_FTP_BYTES)
+        )
 
     def _connect(self) -> ftplib.FTP:
         ftp = ftplib.FTP()
@@ -82,14 +92,35 @@ class FTPExtractor(BaseExtractor):
 
     def _download(self, ftp: ftplib.FTP, filename: str) -> str:
         remote = f"{self.base_path}/{filename}"
-        tmp = os.path.join(tempfile.gettempdir(), filename)
-        with open(tmp, "wb") as f:
-            ftp.retrbinary(f"RETR {remote}", f.write)
-        return tmp
+        safe_local = sanitize_filename(filename, fallback="ftp_download.bin")
+        tmp_path = unique_temp_path(
+            suffix=os.path.splitext(safe_local)[1] or ".bin"
+        )
+
+        total_bytes = 0
+        max_bytes = self.max_download_bytes
+
+        def _write_with_limit(data):
+            nonlocal total_bytes
+            total_bytes += len(data)
+            if total_bytes > max_bytes:
+                raise SecurityError(
+                    f"FTP download exceeded size limit ({max_bytes} bytes)"
+                )
+            f.write(data)
+
+        try:
+            with open(tmp_path, "wb") as f:
+                ftp.retrbinary(f"RETR {remote}", _write_with_limit)
+        except BaseException:
+            from elt.src.extractors._security import _safe_remove
+            _safe_remove(tmp_path)
+            raise
+
+        return tmp_path
 
     def _read_file(self, path: str) -> pd.DataFrame:
         fmt = self.file_format.lower()
-
         if fmt == "csv":
             return pd.read_csv(path, encoding=self.encoding)
         elif fmt == "parquet":
@@ -115,6 +146,9 @@ class FTPExtractor(BaseExtractor):
             self.file_format = config.get("file_format", self.file_format)
             self.encoding = config.get("encoding", self.encoding)
             self.max_files = int(config.get("max_files", self.max_files))
+            self.max_download_bytes = int(
+                config.get("max_download_bytes", self.max_download_bytes)
+            )
 
         if not self.host:
             url = row.get("url", "")
@@ -144,8 +178,8 @@ class FTPExtractor(BaseExtractor):
                     frames.append(df)
                     logger.info(f"[FTP] {filename}: {len(df)} registros")
                 finally:
-                    if os.path.exists(tmp):
-                        os.remove(tmp)
+                    from elt.src.extractors._security import _safe_remove
+                    _safe_remove(tmp)
 
             df_final = pd.concat(frames, ignore_index=True)
             logger.info(

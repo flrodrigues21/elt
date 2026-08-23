@@ -1,9 +1,11 @@
 import logging
 import pandas as pd
+from sqlalchemy import text
 
 from elt.src.connectors.airflow_connections import AirflowConnector
 from elt.src.connectors.postgres_connector import PostgresConnector
 from elt.src.extractors.base import BaseExtractor
+from elt.src.utils.validation import validate_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -42,22 +44,26 @@ class PostgresExtractor(BaseExtractor):
             raise ValueError(
                 "Informe query_source ou table_source no config para o extrator POSTGRES."
             )
-        return f"SELECT * FROM {self.schema_source}.{self.table_source}"
+        safe_schema = validate_identifier(self.schema_source, "schema_source")
+        safe_table = validate_identifier(self.table_source, "table_source")
+        return f"SELECT * FROM {safe_schema}.{safe_table}"
 
     def _build_safe_query(self) -> str:
+        safe_schema = validate_identifier(self.schema_source, "schema_source")
+        safe_table = validate_identifier(self.table_source, "table_source")
+
         with self.engine.connect() as conn:
             result = conn.execute(
-                f"""
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_schema = '{self.schema_source}'
-                  AND table_name = '{self.table_source}'
-                """
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = :schema AND table_name = :tbl"
+                ),
+                {"schema": safe_schema, "tbl": safe_table},
             )
             columns = [row[0] for row in result.fetchall()]
 
         select_parts = [f'"{col}"::text AS "{col}"' for col in columns]
-        return f"SELECT {', '.join(select_parts)} FROM {self.schema_source}.{self.table_source}"
+        return f"SELECT {', '.join(select_parts)} FROM {safe_schema}.{safe_table}"
 
     def extract(self, row: dict) -> pd.DataFrame:
         if not self.query_source and row.get('query_source'):

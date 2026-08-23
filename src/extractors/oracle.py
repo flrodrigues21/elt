@@ -6,6 +6,7 @@ import pandas as pd
 from elt.src.connectors.airflow_connections import AirflowConnector
 from elt.src.connectors.oracle_connector import OracleConnector
 from elt.src.extractors.base import BaseExtractor
+from elt.src.utils.validation import validate_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,8 @@ class OracleExtractor(BaseExtractor):
         airflow_connector = AirflowConnector()
         creds = airflow_connector.get_connection(self.source_connection)
 
-        logger.info(f"Credentials do Airflow: {creds}")
+        from elt.src.connectors.airflow_connections import _sanitize_for_log
+        logger.debug(f"Airflow connection '{self.source_connection}': host={_sanitize_for_log(creds.get('host'))}, user={_sanitize_for_log(creds.get('user'))}")
 
         host = creds.get("host") or self.config.get("host")
         port = creds.get("port") or self.config.get("port") or 1521
@@ -46,7 +48,7 @@ class OracleExtractor(BaseExtractor):
         if not host or not user or not password or not service:
             raise ValueError(
                 f"Conexao '{self.source_connection}' incompleta. "
-                f"host={host}, user={user}, service={service}. "
+                f"host={bool(host)}, user={bool(user)}, service={bool(service)}. "
                 f"Verifique a conexao Airflow ou a config."
             )
 
@@ -67,10 +69,12 @@ class OracleExtractor(BaseExtractor):
             raise ValueError(
                 "Informe query_source ou table_source na schedule para o extrator ORACLE."
             )
+        safe_schema = validate_identifier(self.schema_source, "schema_source") if self.schema_source else None
+        safe_table = validate_identifier(self.table_source, "table_source")
         target = (
-            f'"{self.schema_source}"."{self.table_source}"'
-            if self.schema_source
-            else f'"{self.table_source}"'
+            f'"{safe_schema}"."{safe_table}"'
+            if safe_schema
+            else f'"{safe_table}"'
         )
         return f"SELECT * FROM {target}"
 
