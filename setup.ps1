@@ -45,7 +45,7 @@ if ($Status) {
 
 # ---------- LOGS ----------
 if ($Logs) {
-    Write-Host "1) postgres  2) webserver  3) scheduler  4) minio  5) init" -ForegroundColor Yellow
+    Write-Host "1) postgres  2) webserver  3) scheduler  4) minio  5) init  6) jupyter" -ForegroundColor Yellow
     $choice = Read-Host "Escolha"
     switch ($choice) {
         "1" { docker logs -f elt-postgres }
@@ -53,6 +53,7 @@ if ($Logs) {
         "3" { docker logs -f elt-airflow-scheduler }
         "4" { docker logs -f elt-minio }
         "5" { docker logs -f elt-airflow-init }
+        "6" { docker logs -f elt-jupyter }
         default { docker logs -f elt-postgres }
     }
     exit 0
@@ -107,6 +108,8 @@ if (-not (Test-Path $envFile)) {
         $minioUser = New-SecureString 16
         $minioPass = New-SecureString 24
         $fernetKey = New-FernetKey
+        $jupyterUser = "jovyan"
+        $jupyterPass = New-SecureString 20
 
         $lines = Get-Content $envFile
         for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -117,6 +120,8 @@ if (-not (Test-Path $envFile)) {
             elseif ($lines[$i] -match '^MINIO_ROOT_PASSWORD=')     { $lines[$i] = "MINIO_ROOT_PASSWORD=$minioPass" }
             elseif ($lines[$i] -match '^MINIO_ACCESS_KEY=')        { $lines[$i] = "MINIO_ACCESS_KEY=$minioUser" }
             elseif ($lines[$i] -match '^MINIO_SECRET_KEY=')        { $lines[$i] = "MINIO_SECRET_KEY=$minioPass" }
+            elseif ($lines[$i] -match '^JUPYTER_USERNAME=')        { $lines[$i] = "JUPYTER_USERNAME=$jupyterUser" }
+            elseif ($lines[$i] -match '^JUPYTER_PASSWORD=')        { $lines[$i] = "JUPYTER_PASSWORD=$jupyterPass" }
         }
         $lines | Set-Content $envFile
 
@@ -126,6 +131,8 @@ if (-not (Test-Path $envFile)) {
         Write-Host "  MINIO_ROOT_USER/ACCESS_KEY: gerado (16 caracteres)" -ForegroundColor DarkGray
         Write-Host "  MINIO_ROOT_PASSWORD/SECRET_KEY: gerado (24 caracteres)" -ForegroundColor DarkGray
         Write-Host "  AIRFLOW_FERNET_KEY: gerado" -ForegroundColor DarkGray
+        Write-Host "  JUPYTER_USERNAME: $jupyterUser (identificador do usuario)" -ForegroundColor DarkGray
+        Write-Host "  JUPYTER_PASSWORD: gerado (20 caracteres)" -ForegroundColor DarkGray
         Write-Host "  (valores completos nao exibidos por seguranca)" -ForegroundColor DarkGray
     } else {
         Write-Host "ERRO: .env.example nao encontrado. Crie manualmente." -ForegroundColor Red
@@ -192,6 +199,7 @@ Write-Host ""
 Write-Host "  Airflow:     http://localhost:8080" -ForegroundColor Cyan
 Write-Host "  MinIO:       http://localhost:9001" -ForegroundColor Cyan
 Write-Host "  PostgreSQL:  localhost:5432" -ForegroundColor Cyan
+Write-Host "  JupyterLab:  http://localhost:8888  (senha no .env)" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Credenciais estao no arquivo .env" -ForegroundColor DarkGray
 Write-Host ""
