@@ -34,6 +34,7 @@ cd elt
 | MinIO API | `minio/minio:RELEASE.2024-09-22T00-33-43Z` | `127.0.0.1:9000` | API S3-compativel |
 | MinIO Console | `minio/minio:RELEASE.2024-09-22T00-33-43Z` | `127.0.0.1:9001` | Interface web MinIO |
 | JupyterLab | `jupyter/pyspark-notebook:python-3.11` | `127.0.0.1:8888` | IDE interativo com 13 notebooks de dados |
+| OpenMetadata | `docker.getcollate.io/openmetadata/server:2.0.2` | `127.0.0.1:8585` | Catalogo e governanca opcionais |
 
 > **Portas:** Todas as portas sao publicadas apenas em `127.0.0.1` por seguranca.
 > **Atencao:** Alterar para `0.0.0.0` expoe os servicos a rede local/externa.
@@ -71,6 +72,7 @@ cd elt
 | **Seaborn** | Visualizacao estatistica | Graficos de distribuicao, correlacao (notebook 08) | `docker/Dockerfile.jupyter` | BSD-3-Clause | [seaborn.pydata.org](https://seaborn.pydata.org/) \| [License](https://github.com/mwaskom/seaborn/blob/master/LICENSE) |
 | **Plotly** | Visualizacao interativa | Dashboards e graficos interativos (notebook 08) | `docker/Dockerfile.jupyter` | MIT | [plotly.com](https://plotly.com/python/) \| [License](https://github.com/plotly/plotly.py/blob/master/LICENSE) |
 | **scikit-learn** | Machine Learning para Python | Classificacao, regressao, pipelines (notebook 09) | `docker/Dockerfile.jupyter` | BSD-3-Clause | [scikit-learn.org](https://scikit-learn.org/) \| [License](https://github.com/scikit-learn/scikit-learn/blob/main/LICENSE) |
+| **OpenMetadata** | Plataforma de catalogo e governanca | Descoberta, glossario, ownership, lineage e qualidade | `docker-compose.openmetadata.yml` | Apache 2.0 | [open-metadata.org](https://open-metadata.org/) \| [License](https://github.com/open-metadata/OpenMetadata/blob/main/LICENSE) |
 
 ---
 
@@ -129,6 +131,41 @@ Para ver as credenciais, abra o arquivo `.env` na raiz do projeto.
 | `silver` | Dados transformados | `global.*` |
 | `gold` | Modelo dimensional | `global.*` |
 | `airflow` | Metadados do Airflow | `airflow_*` |
+
+---
+
+## OpenMetadata (opcional)
+
+O OpenMetadata roda em um Compose isolado e cataloga os bancos PostgreSQL e as
+DAGs do Airflow sem alterar a stack principal.
+
+```powershell
+# O ELT deve estar ativo e a DAG elt_municipios_ibge deve ter sido executada
+.\scripts\openmetadata\manage.ps1 start
+.\scripts\openmetadata\manage.ps1 bootstrap
+```
+
+Acesse `http://localhost:8585` com as credenciais locais de
+`.env.openmetadata`. O bootstrap cria de forma idempotente:
+
+- Services dos bancos `elt`, `bronze`, `silver` e `gold` e do Airflow
+- Dicionario de dados para o pipeline de municipios
+- Equipes e ownership demonstrativos
+- Glossario e classificacao de sensibilidade
+- Lineage de tabela e coluna entre Bronze, Silver e Gold
+- Testes de qualidade com resultados publicados no catalogo
+
+Documentacao: [politica de governanca](docs/governance.md) e
+[roteiro de demonstracao](docs/openmetadata-demo.md).
+
+```powershell
+.\scripts\openmetadata\manage.ps1 status
+.\scripts\openmetadata\manage.ps1 health
+.\scripts\openmetadata\manage.ps1 stop
+```
+
+> O ambiente OpenMetadata requer memoria adicional para server, PostgreSQL e
+> Elasticsearch. Reserve aproximadamente 4 GB alem da stack ELT.
 
 ---
 
