@@ -27,6 +27,7 @@ services:
     environment:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@elt-postgres:5432/airflow"
       AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
+      AIRFLOW__CORE__EXECUTOR: "LocalExecutor"
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     volumes:
       - ./docker/airflow_init.sh:/opt/airflow/init.sh
@@ -55,6 +56,7 @@ services:
     environment:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@elt-postgres:5432/airflow"
       AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
+      AIRFLOW__CORE__EXECUTOR: "LocalExecutor"
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
       AIRFLOW__CORE__DAGS_FOLDER: "/opt/airflow/elt"
@@ -90,6 +92,7 @@ services:
     environment:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@elt-postgres:5432/airflow"
       AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
+      AIRFLOW__CORE__EXECUTOR: "LocalExecutor"
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
       AIRFLOW__CORE__DAGS_FOLDER: "/opt/airflow/elt"
