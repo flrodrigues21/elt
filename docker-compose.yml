@@ -1,6 +1,59 @@
+name: elt
+
+x-openmetadata-environment: &openmetadata-environment
+  OPENMETADATA_CLUSTER_NAME: elt-governance
+  SERVER_PORT: 8585
+  SERVER_ADMIN_PORT: 8586
+  LOG_LEVEL: INFO
+  AUTHENTICATION_PROVIDER: basic
+  AUTHENTICATION_PUBLIC_KEYS: "[http://localhost:8585/api/v1/system/config/jwks]"
+  AUTHENTICATION_ENABLE_SELF_SIGNUP: "false"
+  AUTHORIZER_ADMIN_PRINCIPALS: "[admin]"
+  AUTHORIZER_PRINCIPAL_DOMAIN: open-metadata.org
+  AUTHORIZER_ALLOWED_REGISTRATION_DOMAIN: '["open-metadata.org"]'
+  AUTHORIZER_INGESTION_PRINCIPALS: "[ingestion-bot]"
+  DB_DRIVER_CLASS: org.postgresql.Driver
+  DB_SCHEME: postgresql
+  DB_PARAMS: allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC
+  DB_USER: openmetadata_user
+  DB_USER_PASSWORD: ${OM_DB_PASSWORD:?Defina OM_DB_PASSWORD no .env}
+  DB_HOST: openmetadata-postgres
+  DB_PORT: 5432
+  OM_DATABASE: openmetadata_db
+  SEARCH_TYPE: elasticsearch
+  ELASTICSEARCH_HOST: openmetadata-elasticsearch
+  ELASTICSEARCH_PORT: 9200
+  ELASTICSEARCH_SCHEME: http
+  ELASTICSEARCH_USER: ""
+  ELASTICSEARCH_PASSWORD: ""
+  ELASTICSEARCH_CLUSTER_ALIAS: elt-governance
+  PIPELINE_SERVICE_CLIENT_ENABLED: "false"
+  SECRET_MANAGER: db
+  OPENMETADATA_HEAP_OPTS: -Xms1G -Xmx1G
+  MASK_PASSWORDS_API: "true"
+
+x-airflow-runtime-environment: &airflow-runtime-environment
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@elt-postgres:5432/airflow"
+  AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+  AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/elt
+  AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "30"
+  BRONZE_SCHEMA: ${BRONZE_SCHEMA:-global}
+  SILVER_SCHEMA: ${SILVER_SCHEMA:-global}
+  GOLD_SCHEMA: ${GOLD_SCHEMA:-global}
+  SCHEDULE_SCHEMA: ${SCHEDULE_SCHEMA:-global}
+  SCHEDULE_TABLE: ${SCHEDULE_TABLE:-schedule}
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?Defina MINIO_ACCESS_KEY no .env}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Defina MINIO_SECRET_KEY no .env}
+  MINIO_SECURE: ${MINIO_SECURE:-false}
+  MINIO_BUCKET: ${MINIO_BUCKET:-elt-datalake}
+
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
     container_name: elt-postgres
     restart: unless-stopped
     environment:
@@ -23,13 +76,16 @@ services:
       context: .
       dockerfile: docker/Dockerfile.airflow
     container_name: elt-airflow-init
-    env_file:
-      - .env
     environment:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@elt-postgres:5432/airflow"
       AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
-      AIRFLOW__CORE__EXECUTOR: "LocalExecutor"
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      POSTGRES_USER: ${POSTGRES_USER:-elt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no .env}
+      AIRFLOW_ADMIN_USERNAME: ${AIRFLOW_ADMIN_USERNAME:-admin}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?Defina AIRFLOW_ADMIN_PASSWORD no .env}
+      AIRFLOW_ADMIN_EMAIL: ${AIRFLOW_ADMIN_EMAIL:-admin@example.com}
     volumes:
       - ./docker/airflow_init.sh:/opt/airflow/init.sh
       - ./src:/opt/airflow/elt/src
@@ -52,16 +108,8 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:${AIRFLOW_PORT:-8080}:8080"
-    env_file:
-      - .env
     environment:
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@elt-postgres:5432/airflow"
-      AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
-      AIRFLOW__CORE__EXECUTOR: "LocalExecutor"
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
-      AIRFLOW__CORE__DAGS_FOLDER: "/opt/airflow/elt"
-      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "30"
+      <<: *airflow-runtime-environment
     volumes:
       - ./src:/opt/airflow/elt/src
       - ./models:/opt/airflow/elt/models
@@ -88,16 +136,8 @@ services:
       dockerfile: docker/Dockerfile.airflow
     container_name: elt-airflow-scheduler
     restart: unless-stopped
-    env_file:
-      - .env
     environment:
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@elt-postgres:5432/airflow"
-      AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
-      AIRFLOW__CORE__EXECUTOR: "LocalExecutor"
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
-      AIRFLOW__CORE__DAGS_FOLDER: "/opt/airflow/elt"
-      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "30"
+      <<: *airflow-runtime-environment
     volumes:
       - ./src:/opt/airflow/elt/src
       - ./models:/opt/airflow/elt/models
@@ -174,6 +214,109 @@ services:
       postgres:
         condition: service_healthy
 
+  openmetadata-postgres:
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    container_name: elt-openmetadata-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: openmetadata_db
+      POSTGRES_USER: openmetadata_user
+      POSTGRES_PASSWORD: ${OM_DB_PASSWORD:?Defina OM_DB_PASSWORD no .env}
+    volumes:
+      - openmetadata-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openmetadata_user -d openmetadata_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+  openmetadata-elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.3.0@sha256:4f6bdcb742e892539c6ac49b0dd3e4e182e90218546e8c6a22db378c344acb60
+    container_name: elt-openmetadata-elasticsearch
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      ES_JAVA_OPTS: -Xms1g -Xmx1g
+      xpack.security.enabled: "false"
+    volumes:
+      - openmetadata-elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health | grep -Eq '\"status\":\"(green|yellow)\"'"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+
+  openmetadata-migrate:
+    image: docker.getcollate.io/openmetadata/server:2.0.2@sha256:3b6f52aeb30fad82e17287cc8162652010be140ba65ac00cc45ff345b7953e42
+    container_name: elt-openmetadata-migrate
+    restart: "no"
+    command: ./bootstrap/openmetadata-ops.sh migrate
+    environment: *openmetadata-environment
+    depends_on:
+      openmetadata-postgres:
+        condition: service_healthy
+      openmetadata-elasticsearch:
+        condition: service_healthy
+
+  openmetadata-server:
+    image: docker.getcollate.io/openmetadata/server:2.0.2@sha256:3b6f52aeb30fad82e17287cc8162652010be140ba65ac00cc45ff345b7953e42
+    container_name: elt-openmetadata-server
+    restart: unless-stopped
+    environment: *openmetadata-environment
+    ports:
+      - "127.0.0.1:${OPENMETADATA_PORT:-8585}:8585"
+    depends_on:
+      openmetadata-postgres:
+        condition: service_healthy
+      openmetadata-elasticsearch:
+        condition: service_healthy
+      openmetadata-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8586/healthcheck"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  openmetadata-security-init:
+    image: docker.getcollate.io/openmetadata/ingestion:2.0.2@sha256:bf826bac561905698ba0e7eb8307d98126775f29af1202c686359a658a4ddaaa
+    container_name: elt-openmetadata-security-init
+    restart: "no"
+    environment:
+      OPENMETADATA_URL: http://openmetadata-server:8585/api
+      OM_ADMIN_PASSWORD: ${OM_ADMIN_PASSWORD:?Defina OM_ADMIN_PASSWORD no .env}
+    volumes:
+      - ./scripts/openmetadata/initialize_password.py:/opt/openmetadata/initialize_password.py:ro
+    entrypoint: ["python", "/opt/openmetadata/initialize_password.py"]
+    depends_on:
+      openmetadata-server:
+        condition: service_healthy
+
+  openmetadata-bootstrap:
+    image: docker.getcollate.io/openmetadata/ingestion:2.0.2@sha256:bf826bac561905698ba0e7eb8307d98126775f29af1202c686359a658a4ddaaa
+    container_name: elt-openmetadata-bootstrap
+    profiles: ["tools"]
+    environment:
+      OPENMETADATA_URL: http://openmetadata-server:8585/api
+      OM_ADMIN_PASSWORD: ${OM_ADMIN_PASSWORD:?Defina OM_ADMIN_PASSWORD no .env}
+      ELT_POSTGRES_HOST: elt-postgres
+      ELT_POSTGRES_PORT: 5432
+      ELT_POSTGRES_USER: ${POSTGRES_USER:?Defina POSTGRES_USER no .env}
+      ELT_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no .env}
+      ELT_AIRFLOW_URL: http://elt-airflow-webserver:8080
+    volumes:
+      - ./scripts/openmetadata/bootstrap.py:/opt/openmetadata/bootstrap.py:ro
+    entrypoint: ["python", "/opt/openmetadata/bootstrap.py"]
+    depends_on:
+      openmetadata-security-init:
+        condition: service_completed_successfully
+      airflow-webserver:
+        condition: service_healthy
+
 volumes:
   elt-pgdata:
   elt-miniodata:
+  openmetadata-postgres-data:
+  openmetadata-elasticsearch-data:

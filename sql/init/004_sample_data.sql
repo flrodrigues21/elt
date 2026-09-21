@@ -18,7 +18,7 @@ INSERT INTO global.schedule
 VALUES
 ('CSV_URL', 'bronze', 'municipios_ibge', 1, TRUE,
  '0 4 * * 1',
- 'https://raw.githubusercontent.com/kelvins/Municipios-Brasileiros/main/csv/municipios.csv',
+ 'https://raw.githubusercontent.com/kelvins/Municipios-Brasileiros/975a51d6f2e7a9ee22a734a42ebd624263812f0c/csv/municipios.csv',
  'municipios', 'tb_municipios_ibge',
  'global', 'truncate',
  '{"delimiter": ",", "encoding": "utf-8"}');

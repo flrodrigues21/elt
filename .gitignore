@@ -1,7 +1,6 @@
 .env
 .env.*
 !.env.example
-!.env.openmetadata.example
 credentials.json
 credentials*.json
 *.pem

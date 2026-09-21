@@ -20,6 +20,7 @@ warnings.filterwarnings("ignore", category=SAWarning)
 OPENMETADATA_URL = os.environ.get("OPENMETADATA_URL", "http://openmetadata-server:8585/api").rstrip(
     "/"
 )
+ADMIN_USERNAME = "admin@open-metadata.org"
 POSTGRES_HOST = os.environ.get("ELT_POSTGRES_HOST", "elt-postgres")
 POSTGRES_PORT = int(os.environ.get("ELT_POSTGRES_PORT", "5432"))
 
@@ -39,7 +40,7 @@ def login() -> str:
     password = base64.b64encode(required_env("OM_ADMIN_PASSWORD").encode("utf-8")).decode("ascii")
     response = requests.post(
         f"{OPENMETADATA_URL}/v1/users/login",
-        json={"email": required_env("OM_ADMIN_USERNAME"), "password": password},
+        json={"email": ADMIN_USERNAME, "password": password},
         timeout=30,
     )
     response.raise_for_status()
