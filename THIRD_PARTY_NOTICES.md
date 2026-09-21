@@ -205,6 +205,22 @@ for guidance on license compliance in your specific context.
 - **License Text:** https://github.com/theskumar/python-dotenv/blob/main/LICENSE
 - **Usage:** Load environment variables from .env files
 
+### OpenMetadata
+
+- **Website:** https://open-metadata.org
+- **Repository:** https://github.com/open-metadata/OpenMetadata
+- **License:** Apache License 2.0
+- **License Text:** https://github.com/open-metadata/OpenMetadata/blob/main/LICENSE
+- **Usage:** Optional metadata catalog and data governance environment
+
+### Elasticsearch
+
+- **Website:** https://www.elastic.co/elasticsearch
+- **Repository:** https://github.com/elastic/elasticsearch
+- **License:** Elastic License 2.0
+- **License Text:** https://www.elastic.co/licensing/elastic-license
+- **Usage:** Search backend for the optional OpenMetadata environment
+
 ## System Packages (Dockerfile.airflow)
 
 | Package | License | Description |
@@ -216,13 +232,14 @@ for guidance on license compliance in your specific context.
 
 | License | Components |
 |---------|-----------|
-| Apache 2.0 | Airflow, PyArrow, Requests, python-oracledb, minio-py, google-api-python-client, PySpark |
+| Apache 2.0 | Airflow, OpenMetadata, PyArrow, Requests, python-oracledb, minio-py, google-api-python-client, PySpark |
 | MIT | SQLAlchemy, OpenPyXL, gspread, Polars, DuckDB, Plotly |
 | BSD-3-Clause | pandas, python-dotenv, JupyterHub/JupyterLab, NumPy, Seaborn, scikit-learn |
 | LGPL-2.1+ | psycopg2 |
 | PostgreSQL License | PostgreSQL |
 | AGPL-3.0 | MinIO Server |
 | PSF-based | Matplotlib |
+| Elastic License 2.0 | Elasticsearch |
 
 ## Full License Texts
 

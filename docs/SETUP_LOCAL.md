@@ -5,8 +5,9 @@ Guia completo para subir o ambiente de desenvolvimento local do framework ELT.
 ## Pre-requisitos
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) instalado e rodando
-- ~4GB de RAM livre para os containers
-- Portas `5432` (PostgreSQL) e `8080` (Airflow) disponíveis
+- Git, Windows PowerShell 5.1 ou superior e Docker Compose v2
+- ~8GB de RAM livre para os containers
+- Portas padrao `5432`, `8080`, `8585`, `8888`, `9000` e `9001` disponiveis
 
 ## Arquitetura Local
 
@@ -38,8 +39,7 @@ Guia completo para subir o ambiente de desenvolvimento local do framework ELT.
 git clone https://github.com/flrodrigues21/elt
 cd elt
 
-# Copiar .env (ja criado no setup)
-# O .env ja deve existir com as credenciais padrao
+# Nao copie credenciais padrao; o setup gera o .env local com valores aleatorios
 ```
 
 ### 2. Subir tudo
@@ -50,10 +50,10 @@ cd elt
 
 Isso vai:
 - Baixar a imagem PostgreSQL 16
-- Criar os 4 bancos: `elt`, `bronze`, `silver`, `gold`
+- Criar os 5 bancos: `elt`, `bronze`, `silver`, `gold`, `airflow`
 - Criar schemas e tabelas de controle (`elt.global.schedule`, `elt.global.controle_execucao`)
 - Inserir dados de exemplo na tabela schedule
-- Subir Airflow com as connections configuradas
+- Subir Airflow, MinIO, Jupyter e OpenMetadata
 
 ### 3. Verificar
 
@@ -72,8 +72,13 @@ docker logs -f elt-airflow-webserver
 
 | Servico | URL | Usuario | Senha |
 |---------|-----|---------|-------|
-| PostgreSQL | `localhost:5432` | `elt` | `elt123` |
-| Airflow | `http://localhost:8080` | `admin` | `admin` |
+| PostgreSQL | `localhost:5432` | `POSTGRES_USER` | `POSTGRES_PASSWORD` |
+| Airflow | `http://localhost:8080` | `AIRFLOW_ADMIN_USERNAME` | `AIRFLOW_ADMIN_PASSWORD` |
+| MinIO | `http://localhost:9001` | `MINIO_ROOT_USER` | `MINIO_ROOT_PASSWORD` |
+| Jupyter | `http://localhost:8888` | `JUPYTER_USERNAME` | `JUPYTER_PASSWORD` |
+| OpenMetadata | `http://localhost:8585` | `admin@open-metadata.org` | `OM_ADMIN_PASSWORD` |
+
+Os valores e portas efetivos ficam no `.env`, que e ignorado pelo Git.
 
 ## Bancos de Dados
 
@@ -105,8 +110,11 @@ Cada banco possui o schema `global`:
 # Subir
 .\setup.ps1
 
-# Parar (remove containers e volumes)
+# Parar preservando volumes
 .\setup.ps1 -Down
+
+# Remover containers e volumes, com confirmacao explicita
+.\setup.ps1 -PurgeVolumes
 
 # Status
 .\setup.ps1 -Status
@@ -125,10 +133,10 @@ docker exec -it elt-postgres psql -U elt
 docker exec elt-postgres psql -U elt -l
 
 # Consultar schedule
-docker exec elt-postgres psql -U elt -d gold -c "SELECT * FROM global.schedule;"
+docker exec elt-postgres psql -U elt -d elt -c "SELECT * FROM global.schedule;"
 
 # Consultar execucoes
-docker exec elt-postgres psql -U elt -d gold -c "SELECT * FROM global.controle_execucao ORDER BY id DESC LIMIT 10;"
+docker exec elt-postgres psql -U elt -d elt -c "SELECT * FROM global.controle_execucao ORDER BY id DESC LIMIT 10;"
 ```
 
 ### Acessar Airflow
