@@ -1,8 +1,28 @@
-# ELT Lab
+# Data Platform Lab - ELT, Data Lake & Data Governance
 
-Ambiente local de ELT (Extract, Load, Transform) com **Apache Airflow**, **MinIO** e **PostgreSQL** via Docker.
+Laboratorio local de plataforma de dados que implementa um fluxo completo e
+metadata-driven, da ingestao ao consumo analitico. O projeto combina **Apache
+Airflow**, **PostgreSQL**, **MinIO**, **Python/PySpark**, **JupyterLab** e
+**OpenMetadata** em uma unica stack Docker reproduzivel.
 
-Basta clonar e rodar `.\setup.ps1` para ter o lab completo funcionando.
+Na pratica, fontes heterogeneas percorrem as camadas **Bronze, Silver e Gold**,
+com orquestracao, armazenamento relacional ou Parquet, catalogo, governanca,
+lineage e qualidade de dados. Basta clonar e executar `.\setup.ps1` para iniciar
+o laboratorio completo.
+
+## O que este projeto demonstra
+
+| Area | Capacidades praticadas |
+|------|------------------------|
+| **Data Engineering** | Pipelines ELT metadata-driven, Airflow, Python, SQL, multiplas fontes e execucao parametrizada por tabela de controle |
+| **Data Architecture** | Medallion Architecture, Bronze/Silver/Gold, PostgreSQL, MinIO/Data Lake, Parquet e modelagem dimensional |
+| **Data Governance** | OpenMetadata, catalogo, dicionario de dados, glossario, ownership, classificacao, lineage e Data Quality |
+| **Data Lab** | Jupyter, Pandas, Polars, DuckDB, PySpark, visualizacao e fundamentos de Machine Learning |
+
+O resultado e um ambiente de portfolio tecnico para explorar **Data
+Engineering, Data Architecture, Metadata Management, Data Governance, Data
+Quality, Orchestration e Analytics** sem depender de servicos externos
+gerenciados.
 
 ---
 
@@ -97,22 +117,46 @@ Para ver as credenciais, abra o arquivo `.env` na raiz do projeto.
 
 ## Arquitetura
 
+```mermaid
+flowchart LR
+    SRC["Sources<br/>CSV, APIs, FTP, Sheets,<br/>PostgreSQL, Oracle, S3/CKAN"]
+    CFG["elt.global.schedule<br/>Metadata-driven configuration"]
+    AF["Apache Airflow<br/>Orchestration"]
+    B["Bronze<br/>Raw ingestion"]
+    S["Silver<br/>Cleansing and transformation"]
+    G["Gold<br/>Dimensional and aggregated data"]
+    BI["Analytics / BI<br/>Data consumers"]
+    PG[("PostgreSQL<br/>ELT layers and control")]
+    MIO[("MinIO / Parquet<br/>Data Lake option")]
+    LAB["Jupyter Data Lab<br/>Python, SQL and PySpark"]
+    OM["OpenMetadata<br/>Catalog and Metadata Platform"]
+    GOV["Governance<br/>Dictionary, Glossary,<br/>Ownership and Classification"]
+    LIN["Lineage<br/>Table and Column level"]
+    DQ["Data Quality<br/>Tests and Results"]
+
+    CFG --> AF
+    SRC --> AF --> B --> S --> G --> BI
+    B --- PG
+    S --- PG
+    G --- PG
+    B -. configurable storage .-> MIO
+    S -. configurable storage .-> MIO
+    G -. configurable storage .-> MIO
+    PG --> LAB
+    MIO --> LAB
+    LAB --> BI
+
+    PG -. technical metadata .-> OM
+    AF -. operational metadata .-> OM
+    OM --> GOV
+    OM --> LIN
+    OM --> DQ
 ```
-                    elt.global.schedule (tabela de controle)
-                                  |
-            +---------------------+----------------------+
-            |                     |                      |
-       load_bronze          load_silver            load_gold
-       (extratores)      (transformacoes SQL)   (modelo dimensional)
-            |                     |                      |
-       GOOGLE SHEETS           DW query               DW query
-       XLSX                    -> silver               -> gold
-       S3 / CKAN / CSV_URL
-       Oracle / PostgreSQL
-       MinIO (parquet)
-       API REST
-       FTP
-```
+
+O Airflow interpreta a tabela `elt.global.schedule` e gera os fluxos por projeto.
+Cada camada pode persistir em PostgreSQL ou MinIO conforme a configuracao do job.
+O OpenMetadata cataloga os bancos e o pipeline, centralizando metadados tecnicos,
+de negocio e operacionais.
 
 ### Camadas (Medallion Architecture)
 
@@ -142,6 +186,22 @@ Para ver as credenciais, abra o arquivo `.env` na raiz do projeto.
 O OpenMetadata faz parte do mesmo `docker-compose.yml` e do projeto Docker `elt`.
 As credenciais sao geradas a partir do unico `.env` local; os servicos persistem
 somente os dados de autenticacao necessarios em seus bancos internos.
+
+O laboratorio demonstra, sobre ativos reais do pipeline:
+
+- **Technical Metadata:** services, databases, schemas, tabelas e colunas
+- **Business Metadata:** Data Dictionary, Business Glossary, ownership e classificacao
+- **Operational Metadata:** pipeline e tasks do Airflow, execucoes e resultados de qualidade
+- **Lineage:** dependencias em nivel de tabela e coluna, associadas ao pipeline real
+- **Data Quality:** test cases com status, timestamp, resultado e ativo relacionado
+
+O case principal acompanha o fluxo completo de municipios brasileiros:
+
+```text
+tb_municipios_ibge (Bronze)
+          -> tb_municipios_nf (Silver)
+          -> dm_municipios_por_uf (Gold)
+```
 
 ```powershell
 # Sobe ELT, Airflow, Jupyter e OpenMetadata em uma unica stack
@@ -175,6 +235,17 @@ Documentacao: [politica de governanca](docs/governance.md) e
 
 > O setup completo requer aproximadamente 8 GB livres. Todos os containers e
 > volumes sao agrupados no projeto Docker `elt`.
+
+## Qualidade e validacao
+
+A integracao final foi validada funcionalmente, alem da revisao estatica:
+
+- **265 testes automatizados** executados com sucesso
+- Pipeline real **Bronze -> Silver -> Gold** executado e conferido no PostgreSQL
+- Bootstrap OpenMetadata executado consecutivamente sem duplicacao de entidades
+- Catalogo e governanca preservados apos restart exclusivo do OpenMetadata
+- Lineage de tabela e coluna, integracao Airflow e Data Quality validados via API
+- Geracao segura do `.env`, clone limpo e reproducibilidade do Compose validados
 
 ### Upgrade da stack OpenMetadata anterior
 
