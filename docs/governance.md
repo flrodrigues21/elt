@@ -2,7 +2,7 @@
 
 Este laboratorio usa o OpenMetadata 2.0.2 para demonstrar catalogacao, ownership,
 glossario, classificacao, lineage e qualidade sobre o pipeline real de municipios.
-O bootstrap e declarativo e pode ser executado novamente sem duplicar entidades.
+O bootstrap pode ser executado novamente sem duplicar as entidades gerenciadas.
 
 ## Papeis
 
@@ -88,13 +88,20 @@ Os resultados sao calculados no PostgreSQL e publicados no historico de Data
 Quality do OpenMetadata. Uma violacao encerra o bootstrap com erro, tornando a
 checagem adequada para automacao local ou CI.
 
+O CSV demonstrativo e fixado no commit
+`975a51d6f2e7a9ee22a734a42ebd624263812f0c` da fonte publica para manter schema e
+contagens reproduziveis.
+
 ## Seguranca e Operacao
 
-- O OpenMetadata e publicado apenas em `127.0.0.1:8585`.
-- Credenciais ficam em `.env` e `.env.openmetadata`, ambos ignorados pelo Git.
-- O compose do OpenMetadata usa rede e volumes proprios e acessa a rede do ELT somente para catalogacao.
+- O OpenMetadata e publicado apenas em `127.0.0.1`, na porta definida por `OPENMETADATA_PORT` (`8585` por padrao).
+- As credenciais sao geradas a partir do unico `.env`, ignorado pelo Git; os servicos persistem os dados de autenticacao necessarios em seus bancos internos.
+- Todos os servicos pertencem ao projeto Docker `elt`; PostgreSQL e Elasticsearch do OpenMetadata mantem volumes proprios.
+- A senha administrativa default e rotacionada automaticamente para o valor aleatorio de `OM_ADMIN_PASSWORD`.
 - Senhas nao devem ser colocadas em documentacao, argumentos de commit ou logs.
-- O login administrativo default e aceitavel somente neste laboratorio local.
+- O login administrativo usa senha aleatoria mesmo no laboratorio local.
+- A conta bootstrap desta versao e fixa em `admin@open-metadata.org`; somente sua senha e configuravel.
+- Uma chave Fernet antiga, ja rotacionada e sem uso atual, permanece no historico Git como risco historico aceito. Ela nao deve ser reutilizada.
 - Em producao, usar SSO, TLS, secret manager, contas de ingestao com menor privilegio, backups e politicas de retencao.
 
 O conector PostgreSQL pode avisar que `pg_stat_statements` nao esta instalado. Isso

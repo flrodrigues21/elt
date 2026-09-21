@@ -5,16 +5,18 @@ sobre o pipeline `elt_municipios_ibge`.
 
 ## Preparacao
 
-1. Suba o ELT e execute a DAG pelo menos uma vez:
+1. Suba o ELT:
 
    ```powershell
    .\setup.ps1
    ```
 
-2. Suba o OpenMetadata:
+2. Abra o Airflow na porta configurada, execute a DAG `elt_municipios_ibge` e
+   aguarde as tres tasks terminarem em `success`. Alternativamente, dispare pela
+   CLI e acompanhe o resultado na interface:
 
    ```powershell
-   .\scripts\openmetadata\manage.ps1 start
+   docker exec elt-airflow-webserver airflow dags trigger elt_municipios_ibge
    ```
 
 3. Catalogue e governe os ativos:
@@ -23,10 +25,17 @@ sobre o pipeline `elt_municipios_ibge`.
    .\scripts\openmetadata\manage.ps1 bootstrap
    ```
 
-4. Abra `http://localhost:8585` e entre com as credenciais locais definidas em `.env.openmetadata`.
+4. Abra `http://localhost:8585` (ou a porta definida em `OPENMETADATA_PORT`) e
+   entre com `admin@open-metadata.org` e `OM_ADMIN_PASSWORD` do `.env`.
 
-O primeiro `start` cria `.env.openmetadata` a partir do `.env` do ELT. O arquivo e
-local e nao deve ser versionado. O bootstrap pode ser repetido com seguranca.
+O primeiro `setup.ps1` cria um unico `.env`, inicia todos os containers no projeto
+Docker `elt` e troca a senha default do OpenMetadata por uma senha aleatoria. O
+arquivo e local e nao deve ser versionado. O bootstrap pode ser repetido com
+seguranca.
+
+Prepare a stack e execute a DAG antes da apresentacao. O roteiro abaixo foi
+organizado para uma navegacao de aproximadamente cinco minutos com os dados ja
+catalogados.
 
 ## Roteiro
 
@@ -82,15 +91,24 @@ tag de sensibilidade e termos de glossario.
 .\scripts\openmetadata\manage.ps1 stop       # Parar, preservando volumes
 ```
 
-Para remover tambem os dados do OpenMetadata, use o Compose explicitamente e
-confirme antes de apagar volumes. O script `stop` e deliberadamente nao destrutivo.
+O script `stop` e deliberadamente nao destrutivo. Para remover somente a
+infraestrutura e os dados do OpenMetadata, preservando PostgreSQL e MinIO do ELT:
+
+```powershell
+.\scripts\openmetadata\manage.ps1 stop
+docker compose rm -f openmetadata-security-init openmetadata-server openmetadata-migrate openmetadata-elasticsearch openmetadata-postgres
+docker volume rm elt_openmetadata-postgres-data elt_openmetadata-elasticsearch-data
+```
+
+Esses comandos sao destrutivos apenas para o catalogo e devem ser usados somente
+quando a perda dos metadados do OpenMetadata tiver sido confirmada.
 
 ## Solucao de Problemas
 
 | Sintoma | Verificacao |
 |---------|-------------|
 | API indisponivel | Execute `manage.ps1 status` e confira o health do server |
-| Network externa ausente | Suba primeiro o ELT com `.\setup.ps1` |
+| Projeto `elt` ausente | Suba a stack completa com `.\setup.ps1` |
 | Tabelas sem dados | Execute a DAG `elt_municipios_ibge` no Airflow |
 | Aviso sobre `pg_stat_statements` | Ignore no lab; somente usage de queries e afetado |
 | Bootstrap falha em qualidade | Compare os row counts reais com as regras em `bootstrap.py` |

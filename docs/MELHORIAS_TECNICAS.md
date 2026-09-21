@@ -29,7 +29,7 @@ plataforma assume cargas reais ou multiusuário.
 | Artefato | Observações relevantes |
 |----------|----------------------|
 | `docker-compose.yml` | 1 container Postgres 16-alpine para 5 bancos (`elt`, `bronze`, `silver`, `gold`, `airflow`); MinIO single-node; Jupyter limitado (4G/2CPU); sem limits nos demais serviços |
-| `docker-compose.yml`, `.env.example` | `AIRFLOW__CORE__EXECUTOR=LocalExecutor` aplicado ao init, webserver e scheduler |
+| `docker-compose.yml` | `AIRFLOW__CORE__EXECUTOR=LocalExecutor` aplicado ao init, webserver e scheduler |
 | `sql/schedule/001_create_schedule_table.sql` | Tabela de parametrização com índices adequados para o volume atual; `config JSONB` |
 | `sql/schedule/002_create_controle_execucao.sql` | Log de execuções sem particionamento nem política de retenção |
 | `models/gold/transform.py`, `controller/*` | Loop sequencial por steps; conexões abertas por step (sem pool reaproveitado entre steps) |
@@ -150,8 +150,8 @@ inteira a cada execução. Para qualquer fonte com histórico, migrar para:
 O Airflow agora usa **LocalExecutor**: tasks independentes podem executar em paralelo no mesmo host.
 Como o metadata DB já é PostgreSQL, a configuração aplicada é:
 
-```env
-AIRFLOW__CORE__EXECUTOR=LocalExecutor
+```yaml
+AIRFLOW__CORE__EXECUTOR: LocalExecutor
 ```
 
 Ganho: tasks de projetos independentes rodam em paralelo. Configurar ainda:
@@ -165,8 +165,8 @@ AIRFLOW__SCHEDULER__PARSING_PROCESSES=2
 
 ### 4.2 Bind mount do Windows no DAGs folder
 
-`AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/elt` onde `/opt/airflow/elt` é bind mount de
-`C:\Users\...\git`. Filesystem 9P do WSL2 torna cada varredura/listagem de DAGs lenta
+`AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/elt`, com o codigo base copiado na imagem e
+os diretorios da aplicacao montados individualmente. O filesystem 9P do WSL2 pode tornar imports lentos.
 (DAG_DIR_LIST_INTERVAL=30s piora). Opções:
 
 1. **Copiar código na imagem** (`Dockerfile.airflow`: `COPY . /opt/airflow/elt`) — melhor perf; exige rebuild a cada mudança (ok p/ produção).
@@ -214,7 +214,7 @@ Com LocalExecutor + uso contínuo, o banco `airflow` cresce rápido. Agendar `ai
 Pipeline GitHub Actions mínimo:
 
 ```yaml
-push/PR → pytest (247 testes) → ruff/black → pip-audit --desc → build imagens
+push/PR → pytest → ruff/black → pip-audit --desc → build imagens
 main     → push registry (tags imutáveis) → deploy compose em host de staging
 ```
 

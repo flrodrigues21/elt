@@ -20,7 +20,9 @@ cd elt
 # Abra http://localhost:8080, ative e execute a DAG elt_municipios_ibge
 ```
 
-**Prerequisitos:** Docker Desktop instalado e rodando, ~4GB RAM livre.
+**Prerequisitos:** Git, Windows PowerShell 5.1 ou superior, Docker Desktop com
+Docker Compose v2, aproximadamente 8 GB de RAM livre e acesso de rede aos
+registries Docker, GitHub e PyPI durante a primeira construcao.
 
 ---
 
@@ -34,7 +36,7 @@ cd elt
 | MinIO API | `minio/minio:RELEASE.2024-09-22T00-33-43Z` | `127.0.0.1:9000` | API S3-compativel |
 | MinIO Console | `minio/minio:RELEASE.2024-09-22T00-33-43Z` | `127.0.0.1:9001` | Interface web MinIO |
 | JupyterLab | `jupyter/pyspark-notebook:python-3.11` | `127.0.0.1:8888` | IDE interativo com 13 notebooks de dados |
-| OpenMetadata | `docker.getcollate.io/openmetadata/server:2.0.2` | `127.0.0.1:8585` | Catalogo e governanca opcionais |
+| OpenMetadata | `docker.getcollate.io/openmetadata/server:2.0.2` | `127.0.0.1:8585` por padrao | Catalogo, governanca, lineage e qualidade |
 
 > **Portas:** Todas as portas sao publicadas apenas em `127.0.0.1` por seguranca.
 > **Atencao:** Alterar para `0.0.0.0` expoe os servicos a rede local/externa.
@@ -72,7 +74,7 @@ cd elt
 | **Seaborn** | Visualizacao estatistica | Graficos de distribuicao, correlacao (notebook 08) | `docker/Dockerfile.jupyter` | BSD-3-Clause | [seaborn.pydata.org](https://seaborn.pydata.org/) \| [License](https://github.com/mwaskom/seaborn/blob/master/LICENSE) |
 | **Plotly** | Visualizacao interativa | Dashboards e graficos interativos (notebook 08) | `docker/Dockerfile.jupyter` | MIT | [plotly.com](https://plotly.com/python/) \| [License](https://github.com/plotly/plotly.py/blob/master/LICENSE) |
 | **scikit-learn** | Machine Learning para Python | Classificacao, regressao, pipelines (notebook 09) | `docker/Dockerfile.jupyter` | BSD-3-Clause | [scikit-learn.org](https://scikit-learn.org/) \| [License](https://github.com/scikit-learn/scikit-learn/blob/main/LICENSE) |
-| **OpenMetadata** | Plataforma de catalogo e governanca | Descoberta, glossario, ownership, lineage e qualidade | `docker-compose.openmetadata.yml` | Apache 2.0 | [open-metadata.org](https://open-metadata.org/) \| [License](https://github.com/open-metadata/OpenMetadata/blob/main/LICENSE) |
+| **OpenMetadata** | Plataforma de catalogo e governanca | Descoberta, glossario, ownership, lineage e qualidade | `docker-compose.yml` | Apache 2.0 | [open-metadata.org](https://open-metadata.org/) \| [License](https://github.com/open-metadata/OpenMetadata/blob/main/LICENSE) |
 
 ---
 
@@ -87,6 +89,7 @@ Nunca commite o arquivo `.env` ao repositorio (protegido pelo `.gitignore`).
 | **PostgreSQL** | `POSTGRES_USER`, `POSTGRES_PASSWORD` | `localhost:5432` com cliente SQL |
 | **Airflow** | `AIRFLOW_ADMIN_USERNAME`, `AIRFLOW_ADMIN_PASSWORD` | http://localhost:8080 |
 | **MinIO** | `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` | http://localhost:9001 |
+| **OpenMetadata** | `OM_ADMIN_PASSWORD` | `admin@open-metadata.org` em http://localhost:8585 |
 
 Para ver as credenciais, abra o arquivo `.env` na raiz do projeto.
 
@@ -134,19 +137,25 @@ Para ver as credenciais, abra o arquivo `.env` na raiz do projeto.
 
 ---
 
-## OpenMetadata (opcional)
+## OpenMetadata
 
-O OpenMetadata roda em um Compose isolado e cataloga os bancos PostgreSQL e as
-DAGs do Airflow sem alterar a stack principal.
+O OpenMetadata faz parte do mesmo `docker-compose.yml` e do projeto Docker `elt`.
+As credenciais sao geradas a partir do unico `.env` local; os servicos persistem
+somente os dados de autenticacao necessarios em seus bancos internos.
 
 ```powershell
-# O ELT deve estar ativo e a DAG elt_municipios_ibge deve ter sido executada
-.\scripts\openmetadata\manage.ps1 start
+# Sobe ELT, Airflow, Jupyter e OpenMetadata em uma unica stack
+.\setup.ps1
+
+# Depois de executar a DAG elt_municipios_ibge, catalogue os ativos
 .\scripts\openmetadata\manage.ps1 bootstrap
 ```
 
-Acesse `http://localhost:8585` com as credenciais locais de
-`.env.openmetadata`. O bootstrap cria de forma idempotente:
+Acesse `http://localhost:8585` (ou a porta definida em `OPENMETADATA_PORT`) com
+o usuario fixo `admin@open-metadata.org` e `OM_ADMIN_PASSWORD` do `.env`. A senha
+administrativa default do OpenMetadata e substituida automaticamente por uma
+senha aleatoria antes do setup concluir. O bootstrap pode ser repetido sem
+duplicar os objetos gerenciados e cria:
 
 - Services dos bancos `elt`, `bronze`, `silver` e `gold` e do Airflow
 - Dicionario de dados para o pipeline de municipios
@@ -164,8 +173,29 @@ Documentacao: [politica de governanca](docs/governance.md) e
 .\scripts\openmetadata\manage.ps1 stop
 ```
 
-> O ambiente OpenMetadata requer memoria adicional para server, PostgreSQL e
-> Elasticsearch. Reserve aproximadamente 4 GB alem da stack ELT.
+> O setup completo requer aproximadamente 8 GB livres. Todos os containers e
+> volumes sao agrupados no projeto Docker `elt`.
+
+### Upgrade da stack OpenMetadata anterior
+
+A versao anterior desta branch usava o projeto Compose separado
+`elt-openmetadata`. O setup atual detecta containers desse projeto e para sem
+alterar seus volumes. Antes de atualizar, preserve o `.env.openmetadata` e faca
+backup dos volumes `elt-openmetadata_openmetadata-postgres-data` e
+`elt-openmetadata_openmetadata-elasticsearch-data` se precisar manter o catalogo
+antigo. Remova apenas os containers legados e execute `setup.ps1`; os volumes
+antigos permanecem intactos e o catalogo demonstrativo pode ser recriado com o
+bootstrap.
+
+```powershell
+docker ps -a --filter "label=com.docker.compose.project=elt-openmetadata"
+docker rm -f elt-openmetadata-server elt-openmetadata-migrate elt-openmetadata-elasticsearch elt-openmetadata-postgres
+.\setup.ps1
+.\scripts\openmetadata\manage.ps1 bootstrap
+```
+
+Nao use `docker volume rm` nesse fluxo sem ter confirmado o backup ou a perda
+intencional do catalogo anterior.
 
 ---
 
@@ -179,7 +209,8 @@ Documentacao: [politica de governanca](docs/governance.md) e
 .\setup.ps1 -Logs          # Ver logs (escolhe container)
 ```
 
-Ou manualmente:
+Depois que `setup.ps1` gerar e preencher o `.env`, a stack tambem pode ser
+iniciada manualmente:
 
 ```powershell
 docker compose up -d --build
@@ -210,7 +241,7 @@ docker compose up -d --build
 - Portas publicadas apenas em `127.0.0.1` (localhost)
 - Arquivos `.env` nao versionados (gitignore)
 - Credenciais nao expostas no terminal durante setup
-- Imagens Docker com versoes fixadas (nao `:latest`)
+- Imagens Docker base fixadas por tag e digest SHA-256
 - Protecao contra path traversal em downloads
 - Protecao contra SSRF (validacao de esquema e resolucao DNS)
 - Limites de tamanho em downloads e extracao de ZIPs
@@ -227,7 +258,7 @@ Este repositorio e projetado para **desenvolvimento e testes locais**. Para uso 
 2. **TLS:** Configure TLS/proxy reverso para todas as portas expostas
 3. **Network:** Use redes Docker dedicadas; nunca exponha servicos diretamente
 4. **Monitoring:** Adicione Prometheus/Grafana para metricas de Airflow e PostgreSQL
-5. **Backup:** Configure backup automatico dos volumes `elt-pgdata` e `elt-miniodata`
+5. **Backup:** Configure backup automatico dos volumes `elt_elt-pgdata` e `elt_elt-miniodata`
 6. **Logs:** Centralize logs com ELK/Fluentd/Loki
 7. **Resource Limits:** Adicione `deploy.resources.limits` no `docker-compose.yml`
 
@@ -482,7 +513,7 @@ minuto hora dia_do_mes mes dia_da_semana
 
 ## Gerenciamento de Dependencias
 
-- **Imagens Docker:** Todas fixadas com tag de versao. MinIO tambem fixado por digest SHA-256
+- **Imagens Docker base:** Fixadas com tag e digest SHA-256
 - **Python (requirements-airflow.txt):** Versoes sem upper bound, resolvidas via constraints oficiais
 - **Airflow constraints:** `Dockerfile.airflow` usa constraints oficiais da versao 2.9.3
   (`constraints-3.11.txt`), garantindo compatibilidade entre providers e SDKs
