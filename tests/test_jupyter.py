@@ -129,7 +129,8 @@ class TestComposeSecurity:
     def test_airflow_uses_local_executor(self):
         """Airflow must allow independent tasks to run concurrently."""
         content = COMPOSE.read_text(encoding="utf-8")
-        assert content.count('AIRFLOW__CORE__EXECUTOR: "LocalExecutor"') == 3
+        assert content.count("AIRFLOW__CORE__EXECUTOR: LocalExecutor") == 2
+        assert content.count("<<: *airflow-runtime-environment") == 2
 
     def test_jupyter_binds_localhost_only(self):
         content = COMPOSE.read_text(encoding="utf-8")
