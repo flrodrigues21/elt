@@ -1,6 +1,6 @@
 ﻿# ============================================================
 # ELT Lab
-# Sobe PostgreSQL, Airflow, MinIO, Jupyter e OpenMetadata via Docker
+# Sobe PostgreSQL, Airflow, MinIO, Spark, Jupyter e OpenMetadata via Docker
 # ============================================================
 
 param(
@@ -32,7 +32,7 @@ function Get-EnvValue([string]$Path, [string]$Name, [string]$Default) {
     return $value
 }
 
-function Wait-HealthyContainer([string]$ContainerName, [int]$MaxRetries = 40) {
+function Wait-HealthyContainer([string]$ContainerName, [int]$MaxRetries = 120) {
     for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
         $health = docker inspect $ContainerName --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' 2>$null
         if ($LASTEXITCODE -eq 0 -and $health -eq "healthy") { return }
@@ -105,7 +105,7 @@ if ($Status) {
 
 # ---------- LOGS ----------
 if ($Logs) {
-    Write-Host "1) postgres  2) webserver  3) scheduler  4) minio  5) init  6) jupyter  7) openmetadata" -ForegroundColor Yellow
+    Write-Host "1) postgres  2) webserver  3) scheduler  4) minio  5) init  6) jupyter  7) openmetadata  8) spark-master  9) spark-worker" -ForegroundColor Yellow
     $choice = Read-Host "Escolha"
     switch ($choice) {
         "1" { docker logs -f elt-postgres }
@@ -115,6 +115,8 @@ if ($Logs) {
         "5" { docker logs -f elt-airflow-init }
         "6" { docker logs -f elt-jupyter }
         "7" { docker logs -f elt-openmetadata-server }
+        "8" { docker logs -f elt-spark-master }
+        "9" { docker logs -f elt-spark-worker }
         default { docker logs -f elt-postgres }
     }
     Assert-ExitCode $LASTEXITCODE "docker logs"
@@ -327,8 +329,8 @@ $maxRetries = 30
 $retry = 0
 while ($retry -lt $maxRetries) {
     $postgresUser = Get-EnvValue $envFile "POSTGRES_USER" "elt"
-    $ready = docker exec elt-postgres pg_isready -U $postgresUser 2>$null
-    if ($LASTEXITCODE -eq 0) {
+    $ready = docker exec elt-postgres psql -U $postgresUser -d elt -tAc "SELECT to_regclass('global.schedule');" 2>$null
+    if ($LASTEXITCODE -eq 0 -and $ready -match "global.schedule") {
         Write-Host "PostgreSQL pronto!" -ForegroundColor Green
         break
     }
@@ -346,12 +348,14 @@ Write-Header "Atualizando configuracao reproduzivel do pipeline demonstrativo"
 $municipiosUrl = "https://raw.githubusercontent.com/kelvins/Municipios-Brasileiros/975a51d6f2e7a9ee22a734a42ebd624263812f0c/csv/municipios.csv"
 docker exec elt-postgres psql -U $postgresUser -d elt -v ON_ERROR_STOP=1 -c "UPDATE global.schedule SET url='$municipiosUrl' WHERE projeto='municipios_ibge' AND layer='bronze';"
 Assert-ExitCode $LASTEXITCODE "atualizacao da fonte do pipeline demonstrativo"
+docker exec elt-postgres psql -U $postgresUser -d elt -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/005_spark_sample.sql
+Assert-ExitCode $LASTEXITCODE "configuracao do pipeline Spark demonstrativo"
 
-Write-Header "Construindo imagens do Airflow e Jupyter"
-docker compose build airflow-init airflow-webserver airflow-scheduler jupyter
+Write-Header "Construindo imagens do Airflow, Spark e Jupyter"
+docker compose build airflow-init airflow-webserver airflow-scheduler spark-master spark-worker jupyter
 Assert-ExitCode $LASTEXITCODE "docker compose build"
 
-Write-Header "Subindo Airflow + Jupyter + OpenMetadata"
+Write-Header "Subindo Airflow + Spark + Jupyter + OpenMetadata"
 $ErrorActionPreferenceOld = $ErrorActionPreference
 $ErrorActionPreference = "SilentlyContinue"
 docker compose up -d --no-build
@@ -411,9 +415,11 @@ if ($retry -eq $maxRetries) {
 }
 
 Write-Header "Aguardando interfaces ficarem saudaveis"
+Wait-HealthyContainer "elt-spark-master"
+Wait-HealthyContainer "elt-spark-worker"
 Wait-HealthyContainer "elt-airflow-webserver"
 Wait-HealthyContainer "elt-jupyter"
-Write-Host "Airflow e Jupyter prontos!" -ForegroundColor Green
+Write-Host "Spark, Airflow e Jupyter prontos!" -ForegroundColor Green
 
 Write-Header "Status final"
 docker ps --filter "name=elt-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
@@ -424,6 +430,7 @@ $airflowPort = Get-EnvValue $envFile "AIRFLOW_PORT" "8080"
 $minioConsolePort = Get-EnvValue $envFile "MINIO_CONSOLE_PORT" "9001"
 $postgresPort = Get-EnvValue $envFile "POSTGRES_PORT" "5432"
 $jupyterPort = Get-EnvValue $envFile "JUPYTER_PORT" "8888"
+$sparkUiPort = Get-EnvValue $envFile "SPARK_UI_PORT" "8082"
 
 Write-Host "`nSetup concluido!" -ForegroundColor Green
 Write-Host ""
@@ -431,6 +438,7 @@ Write-Host "  Airflow:     http://localhost:$airflowPort" -ForegroundColor Cyan
 Write-Host "  MinIO:       http://localhost:$minioConsolePort" -ForegroundColor Cyan
 Write-Host "  PostgreSQL:  localhost:$postgresPort" -ForegroundColor Cyan
 Write-Host "  JupyterLab:  http://localhost:$jupyterPort  (senha no .env)" -ForegroundColor Cyan
+Write-Host "  Spark:       http://localhost:$sparkUiPort" -ForegroundColor Cyan
 Write-Host "  OpenMetadata: http://localhost:$openMetadataPort  (senha no .env)" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Credenciais estao no arquivo .env" -ForegroundColor DarkGray

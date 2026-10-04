@@ -32,7 +32,25 @@ x-openmetadata-environment: &openmetadata-environment
   OPENMETADATA_HEAP_OPTS: -Xms1G -Xmx1G
   MASK_PASSWORDS_API: "true"
 
+x-data-runtime-environment: &data-runtime-environment
+  SPARK_MASTER_URL: spark://spark-master:7077
+  SPARK_DRIVER_BIND_ADDRESS: 0.0.0.0
+  POSTGRES_HOST: elt-postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: ${POSTGRES_USER:-elt}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no .env}
+  POSTGRES_DB: ${SCHEDULE_DB:-elt}
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?Defina MINIO_ACCESS_KEY no .env}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Defina MINIO_SECRET_KEY no .env}
+  MINIO_SECURE: ${MINIO_SECURE:-false}
+  MINIO_BUCKET: ${MINIO_BUCKET:-elt-datalake}
+  AWS_REGION: ${AWS_REGION:-us-east-1}
+  PYSPARK_PYTHON: python
+  PYTHONPATH: /opt
+
 x-airflow-runtime-environment: &airflow-runtime-environment
+  <<: *data-runtime-environment
   AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@elt-postgres:5432/airflow"
   AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
   AIRFLOW__CORE__EXECUTOR: LocalExecutor
@@ -40,16 +58,16 @@ x-airflow-runtime-environment: &airflow-runtime-environment
   AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
   AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/elt
   AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "30"
+  AIRFLOW__WEBSERVER__WORKERS: "1"
+  AIRFLOW__WEBSERVER__WEB_SERVER_MASTER_TIMEOUT: "300"
   BRONZE_SCHEMA: ${BRONZE_SCHEMA:-global}
   SILVER_SCHEMA: ${SILVER_SCHEMA:-global}
   GOLD_SCHEMA: ${GOLD_SCHEMA:-global}
   SCHEDULE_SCHEMA: ${SCHEDULE_SCHEMA:-global}
   SCHEDULE_TABLE: ${SCHEDULE_TABLE:-schedule}
-  MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
-  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?Defina MINIO_ACCESS_KEY no .env}
-  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Defina MINIO_SECRET_KEY no .env}
-  MINIO_SECURE: ${MINIO_SECURE:-false}
-  MINIO_BUCKET: ${MINIO_BUCKET:-elt-datalake}
+  SPARK_DRIVER_HOST: airflow-scheduler
+  PYSPARK_DRIVER_PYTHON: python
+  PYSPARK_SUBMIT_ARGS: "--master spark://spark-master:7077 --conf spark.driver.host=airflow-scheduler --conf spark.driver.bindAddress=0.0.0.0 pyspark-shell"
 
 services:
   postgres:
@@ -66,10 +84,11 @@ services:
       - elt-pgdata:/var/lib/postgresql/data
       - ./sql/init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-elt}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-elt} -d elt && psql -U $${POSTGRES_USER:-elt} -d elt -tAc \"SELECT to_regclass('global.schedule')\" | grep -q global.schedule"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 15
+      start_period: 20s
 
   airflow-init:
     build:
@@ -117,13 +136,19 @@ services:
       - ./main.py:/opt/airflow/elt/main.py
       - ./__init__.py:/opt/airflow/elt/__init__.py
       - ./utils:/opt/airflow/elt/utils
+      - ./src:/opt/elt/src:ro
+      - ./models:/opt/elt/models:ro
+      - ./controller:/opt/elt/controller:ro
+      - ./main.py:/opt/elt/main.py:ro
+      - ./__init__.py:/opt/elt/__init__.py:ro
+      - ./utils:/opt/elt/utils:ro
     command: webserver
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 300s
     depends_on:
       airflow-init:
         condition: service_completed_successfully
@@ -145,15 +170,23 @@ services:
       - ./main.py:/opt/airflow/elt/main.py
       - ./__init__.py:/opt/airflow/elt/__init__.py
       - ./utils:/opt/airflow/elt/utils
+      - ./src:/opt/elt/src:ro
+      - ./models:/opt/elt/models:ro
+      - ./controller:/opt/elt/controller:ro
+      - ./main.py:/opt/elt/main.py:ro
+      - ./__init__.py:/opt/elt/__init__.py:ro
+      - ./utils:/opt/elt/utils:ro
     command: scheduler
     depends_on:
       airflow-init:
         condition: service_completed_successfully
       minio:
         condition: service_healthy
+      spark-worker:
+        condition: service_healthy
 
   minio:
-    image: quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z@sha256:abe32ef927c0b13b693356c17ca48bb6a79729021b4b8a2dd46714fb2336ca98
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5@sha256:f24044f19432b7664fb956eade7dbb55ed5f7f22f08eb7c8fce68ac0ffaceca4
     container_name: elt-minio
     restart: unless-stopped
     environment:
@@ -163,13 +196,80 @@ services:
       - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
       - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
-      - elt-miniodata:/data
-    command: server /data --console-address ":9001"
+      - elt-miniodata:/bitnami/minio/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+  spark-master:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.spark
+    container_name: elt-spark-master
+    restart: unless-stopped
+    environment:
+      SPARK_MASTER_HOST: spark-master
+      SPARK_MASTER_PORT: "7077"
+      SPARK_MASTER_WEBUI_PORT: "8080"
+      SPARK_DAEMON_MEMORY: 384m
+      PYSPARK_PYTHON: python
+      PYTHONPATH: /opt
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "spark-master", "--port", "7077", "--webui-port", "8080"]
+    ports:
+      - "127.0.0.1:${SPARK_UI_PORT:-8082}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080 | grep -q 'Spark Master' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
+  spark-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.spark
+    container_name: elt-spark-worker
+    restart: unless-stopped
+    environment:
+      SPARK_WORKER_CORES: "2"
+      SPARK_WORKER_MEMORY: 1g
+      SPARK_WORKER_WEBUI_PORT: "8081"
+      SPARK_DAEMON_MEMORY: 384m
+      PYSPARK_PYTHON: python
+      PYTHONPATH: /opt
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077", "--cores", "2", "--memory", "1g", "--webui-port", "8081"]
+    volumes:
+      - ./src:/opt/elt/src:ro
+      - ./models:/opt/elt/models:ro
+      - ./controller:/opt/elt/controller:ro
+      - ./main.py:/opt/elt/main.py:ro
+      - ./__init__.py:/opt/elt/__init__.py:ro
+      - ./utils:/opt/elt/utils:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081 | grep -q 'Spark Worker' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2"
+    depends_on:
+      spark-master:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
 
   jupyter:
     build:
@@ -178,15 +278,15 @@ services:
     container_name: elt-jupyter
     restart: unless-stopped
     environment:
+      <<: *data-runtime-environment
       JUPYTER_PORT: "${JUPYTER_PORT:-8888}"
       JUPYTER_USERNAME: "${JUPYTER_USERNAME:-jovyan}"
       JUPYTER_PASSWORD: "${JUPYTER_PASSWORD:?Defina JUPYTER_PASSWORD no .env}"
       POSTGRES_HOST: elt-postgres
       POSTGRES_PORT: "5432"
-      POSTGRES_USER: ${POSTGRES_USER:-elt}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      PYSPARK_PYTHON: python
+      SPARK_DRIVER_HOST: jupyter
       PYSPARK_DRIVER_PYTHON: python
+      PYSPARK_SUBMIT_ARGS: "--master spark://spark-master:7077 --conf spark.driver.host=jupyter --conf spark.driver.bindAddress=0.0.0.0 pyspark-shell"
     ports:
       - "127.0.0.1:${JUPYTER_PORT:-8888}:8888"
     volumes:
@@ -199,6 +299,12 @@ services:
       - ./sql:/home/jovyan/work/ELT/sql:ro
       - ./main.py:/home/jovyan/work/ELT/main.py:ro
       - ./pyproject.toml:/home/jovyan/work/ELT/pyproject.toml:ro
+      - ./src:/opt/elt/src:ro
+      - ./models:/opt/elt/models:ro
+      - ./controller:/opt/elt/controller:ro
+      - ./main.py:/opt/elt/main.py:ro
+      - ./__init__.py:/opt/elt/__init__.py:ro
+      - ./utils:/opt/elt/utils:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8888/login | grep -qi 'password' || exit 1"]
       interval: 30s
@@ -212,6 +318,10 @@ services:
           cpus: "2"
     depends_on:
       postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      spark-worker:
         condition: service_healthy
 
   openmetadata-postgres:

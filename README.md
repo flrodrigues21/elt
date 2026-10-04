@@ -14,7 +14,7 @@ o laboratorio completo.
 
 | Area | Capacidades praticadas |
 |------|------------------------|
-| **Data Engineering** | Pipelines ELT metadata-driven, Airflow, Python, SQL, multiplas fontes e execucao parametrizada por tabela de controle |
+| **Data Engineering** | Pipelines ELT metadata-driven, Airflow, Python/SQL ou Spark, multiplas fontes e execucao parametrizada por tabela de controle |
 | **Data Architecture** | Medallion Architecture, Bronze/Silver/Gold, PostgreSQL, MinIO/Data Lake, Parquet e modelagem dimensional |
 | **Data Governance** | OpenMetadata, catalogo, dicionario de dados, glossario, ownership, classificacao, lineage e Data Quality |
 | **Data Lab** | Jupyter, Pandas, Polars, DuckDB, PySpark, visualizacao e fundamentos de Machine Learning |
@@ -41,8 +41,8 @@ cd elt
 ```
 
 **Prerequisitos:** Git, Windows PowerShell 5.1 ou superior, Docker Desktop com
-Docker Compose v2, aproximadamente 8 GB de RAM livre e acesso de rede aos
-registries Docker, GitHub e PyPI durante a primeira construcao.
+Docker Compose v2, aproximadamente 10 GB de RAM livre e acesso de rede aos
+registries Docker, GitHub, PyPI e Maven Central durante a primeira construcao.
 
 ---
 
@@ -53,8 +53,10 @@ registries Docker, GitHub e PyPI durante a primeira construcao.
 | PostgreSQL | `postgres:16-alpine` | `127.0.0.1:5432` | 5 bancos: `elt`, `bronze`, `silver`, `gold`, `airflow` |
 | Airflow Webserver | `apache/airflow:2.9.3-python3.11` | `127.0.0.1:8080` | Interface de gerenciamento de DAGs |
 | Airflow Scheduler | `apache/airflow:2.9.3-python3.11` | - | Execucao agendada de DAGs |
-| MinIO API | `minio/minio:RELEASE.2024-09-22T00-33-43Z` | `127.0.0.1:9000` | API S3-compativel |
-| MinIO Console | `minio/minio:RELEASE.2024-09-22T00-33-43Z` | `127.0.0.1:9001` | Interface web MinIO |
+| Spark Master | Spark 3.5.0 | `127.0.0.1:8082` | Coordenacao do cluster e UI local |
+| Spark Worker | Spark 3.5.0 | - | Executor com 2 CPUs e 1 GB anunciado ao cluster |
+| MinIO API | `bitnamilegacy/minio:2025.7.23` | `127.0.0.1:9000` | API S3-compativel |
+| MinIO Console | `bitnamilegacy/minio:2025.7.23` | `127.0.0.1:9001` | Interface web MinIO |
 | JupyterLab | `jupyter/pyspark-notebook:python-3.11` | `127.0.0.1:8888` | IDE interativo com 13 notebooks de dados |
 | OpenMetadata | `docker.getcollate.io/openmetadata/server:2.0.2` | `127.0.0.1:8585` por padrao | Catalogo, governanca, lineage e qualidade |
 
@@ -86,7 +88,7 @@ registries Docker, GitHub e PyPI durante a primeira construcao.
 | **google-api-python-client** | Cliente Python para Google APIs | Acesso ao Google Sheets API v4 | `src/extractors/google_sheets.py` | Apache 2.0 | [github.com/googleapis/google-api-python-client](https://github.com/googleapis/google-api-python-client) \| [License](https://github.com/googleapis/google-api-python-client/blob/main/LICENSE) |
 | **gspread** | Wrapper Python para Google Sheets | Abstracao simplificada do Sheets API | `src/extractors/google_sheets.py` | MIT | [github.com/burnash/gspread](https://github.com/burnash/gspread) \| [License](https://github.com/burnash/gspread/blob/master/LICENSE) |
 | **JupyterLab** | IDE interativo para notebooks | Ambiente de exploracao e aprendizado de dados | `docker/Dockerfile.jupyter`, `data_lab/*.ipynb` | BSD-3-Clause | [jupyter.org](https://jupyter.org/) \| [License](https://github.com/jupyter/jupyter_server/blob/main/LICENSE) |
-| **PySpark** | API Python para Apache Spark | Processamento distribuido de dados (notebooks 10-12) | `docker/Dockerfile.jupyter` (base image) | Apache 2.0 | [spark.apache.org](https://spark.apache.org/) \| [License](https://www.apache.org/licenses/LICENSE-2.0) |
+| **PySpark 3.5.0** | API Python para Apache Spark | Engine opcional do ELT e notebooks 10-12 | `src/spark/`, `docker/Dockerfile.spark` | Apache 2.0 | [spark.apache.org](https://spark.apache.org/) \| [License](https://www.apache.org/licenses/LICENSE-2.0) |
 | **NumPy** | Computacao numerica vetorial | Arrays e operacoes matriciais (notebook 02) | `docker/Dockerfile.jupyter` | BSD-3-Clause | [numpy.org](https://numpy.org/) \| [License](https://github.com/numpy/numpy/blob/main/LICENSE.txt) |
 | **Polars** | DataFrame framework em Rust | Alternativa rapida ao Pandas (notebook 04) | `docker/Dockerfile.jupyter` | MIT | [pola.rs](https://pola.rs/) \| [License](https://github.com/pola-rs/polars/blob/main/LICENSE.txt) |
 | **DuckDB** | Database analitico embutido | SQL sobre DataFrames (notebook 04) | `docker/Dockerfile.jupyter` | MIT | [duckdb.org](https://duckdb.org/) \| [License](https://github.com/duckdb/duckdb/blob/main/LICENSE) |
@@ -122,6 +124,9 @@ flowchart LR
     SRC["Sources<br/>CSV, APIs, FTP, Sheets,<br/>PostgreSQL, Oracle, S3/CKAN"]
     CFG["elt.global.schedule<br/>Metadata-driven configuration"]
     AF["Apache Airflow<br/>Orchestration"]
+    ENG{"Processing engine"}
+    LEG["Python / SQL<br/>Pandas and PostgreSQL"]
+    SP["Spark 3.5<br/>Standalone cluster"]
     B["Bronze<br/>Raw ingestion"]
     S["Silver<br/>Cleansing and transformation"]
     G["Gold<br/>Dimensional and aggregated data"]
@@ -134,8 +139,13 @@ flowchart LR
     LIN["Lineage<br/>Table and Column level"]
     DQ["Data Quality<br/>Tests and Results"]
 
-    CFG --> AF
+    CFG --> AF --> ENG
+    ENG --> LEG
+    ENG --> SP
     SRC --> AF --> B --> S --> G --> BI
+    LEG --> S
+    SP --> S
+    SP --> G
     B --- PG
     S --- PG
     G --- PG
@@ -153,8 +163,10 @@ flowchart LR
     OM --> DQ
 ```
 
-O Airflow interpreta a tabela `elt.global.schedule` e gera os fluxos por projeto.
-Cada camada pode persistir em PostgreSQL ou MinIO conforme a configuracao do job.
+O Airflow interpreta a tabela `elt.global.schedule`, resolve `config.engine` e gera
+os fluxos por projeto. A ausencia de `engine` preserva a execucao Python/Pandas
+anterior; `engine=spark` usa o cluster standalone. Cada camada pode persistir em
+PostgreSQL ou MinIO conforme a configuracao do job.
 O OpenMetadata cataloga os bancos e o pipeline, centralizando metadados tecnicos,
 de negocio e operacionais.
 
@@ -163,8 +175,8 @@ de negocio e operacionais.
 | Camada | Descricao | Destino |
 |--------|-----------|---------|
 | **Bronze** | Extracao de dados brutos de fontes heterogeneas | PostgreSQL `bronze` ou MinIO (parquet) |
-| **Silver** | Transformacao/limpeza via queries SQL | PostgreSQL `silver` ou MinIO (parquet) |
-| **Gold** | Modelo dimensional (dimensoes e fatos) | PostgreSQL `gold` ou MinIO (parquet) |
+| **Silver** | Transformacao/limpeza via Pandas/SQL ou PySpark | PostgreSQL `silver` ou MinIO (parquet) |
+| **Gold** | Modelo dimensional e agregacoes via Pandas/SQL ou PySpark | PostgreSQL `gold` ou MinIO (parquet) |
 | **Controle** | Tabela de schedule e log de execucoes | PostgreSQL `elt` |
 
 > Cada camada pode gravar em **PostgreSQL** (padrao) ou **MinIO** (parquet), basta configurar via `config` na tabela `schedule`.
@@ -233,19 +245,37 @@ Documentacao: [politica de governanca](docs/governance.md) e
 .\scripts\openmetadata\manage.ps1 stop
 ```
 
-> O setup completo requer aproximadamente 8 GB livres. Todos os containers e
+> O setup completo requer aproximadamente 10 GB livres. Todos os containers e
 > volumes sao agrupados no projeto Docker `elt`.
 
 ## Qualidade e validacao
 
 A integracao final foi validada funcionalmente, alem da revisao estatica:
 
-- **265 testes automatizados** executados com sucesso
+- **282 testes automatizados aprovados e 1 ignorado**
 - Pipeline real **Bronze -> Silver -> Gold** executado e conferido no PostgreSQL
 - Bootstrap OpenMetadata executado consecutivamente sem duplicacao de entidades
 - Catalogo e governanca preservados apos restart exclusivo do OpenMetadata
 - Lineage de tabela e coluna, integracao Airflow e Data Quality validados via API
 - Geracao segura do `.env`, clone limpo e reproducibilidade do Compose validados
+
+### Validacao end-to-end
+
+- 5.571 municipios processados
+- Bronze -> Silver -> Gold concluido via Airflow
+- Silver e Gold processados com Spark
+- 9 agregacoes Gold
+- MinIO/S3A validado
+- PostgreSQL JDBC validado com escrita, leitura e cleanup
+- Airflow sem erros de importacao e containers sem reinicios
+
+```powershell
+py -m pytest
+docker compose config --quiet
+python -m compileall .
+git diff --check
+docker exec elt-airflow-scheduler python /opt/airflow/elt/tests/integration_spark_pipeline.py
+```
 
 ### Upgrade da stack OpenMetadata anterior
 
@@ -279,6 +309,9 @@ intencional do catalogo anterior.
 .\setup.ps1 -Status        # Ver status dos containers
 .\setup.ps1 -Logs          # Ver logs (escolhe container)
 ```
+
+A UI do Spark fica em `http://localhost:8082` por padrao e e publicada apenas em
+`127.0.0.1`. O worker nao publica portas no host.
 
 Depois que `setup.ps1` gerar e preencher o `.env`, a stack tambem pode ser
 iniciada manualmente:
@@ -331,7 +364,7 @@ Este repositorio e projetado para **desenvolvimento e testes locais**. Para uso 
 4. **Monitoring:** Adicione Prometheus/Grafana para metricas de Airflow e PostgreSQL
 5. **Backup:** Configure backup automatico dos volumes `elt_elt-pgdata` e `elt_elt-miniodata`
 6. **Logs:** Centralize logs com ELK/Fluentd/Loki
-7. **Resource Limits:** Adicione `deploy.resources.limits` no `docker-compose.yml`
+7. **Resource Limits:** Revise os limites do Spark/Jupyter e adicione limites aos demais servicos
 
 ---
 
@@ -350,6 +383,8 @@ elt/
 |   +-- silver/transform.py     # Transformacao generica
 |   +-- gold/transform.py       # Modelo dimensional generico
 +-- src/
+|   +-- processing/             # Resolver de engine, registry e executor Spark
+|   +-- spark/                  # SparkSession, S3A/JDBC e transforms registradas
 |   +-- schedule/               # Leitura da tabela de controle
 |   +-- connectors/             # Conectores de banco e servicos
 |   |   +-- postgres_connector.py
@@ -375,6 +410,7 @@ elt/
 |   +-- Dockerfile.airflow
 |   +-- airflow_init.sh
 |   +-- requirements-airflow.txt
+|   +-- Dockerfile.spark
 +-- docker-compose.yml
 +-- .env                        # Credenciais (nao versionado)
 +-- .env.example                # Template de configuracao
@@ -433,12 +469,12 @@ O ELT Lab inclui um ambiente **JupyterLab** com 13 notebooks para explorar e apr
 | Seaborn | 0.13.2 | Graficos estatisticos |
 | Plotly | 5.24.1 | Graficos interativos |
 | scikit-learn | 1.5.2 | Machine Learning |
-| PySpark | (base image) | Processamento distribuido |
+| PySpark | 3.5.0 | Processamento local nos notebooks ou no cluster da stack |
 
 ### Seguranca do Data Lab
 
 - Porta publicada apenas em `127.0.0.1` (localhost)
-- Autenticacao por senha (hash SHA-256, token desabilitado)
+- Autenticacao por senha com hash seguro do Jupyter (token desabilitado)
 - Tela de login obrigatoria no navegador (senha unica, sem token)
 - Todos os notebooks funcionam offline (sem internet)
 - Dados sinteticos (sem dados reais ou credenciais)
@@ -553,6 +589,124 @@ VALUES
 | Gold | PostgreSQL (SQL) | PostgreSQL (padrao) | Sem config |
 | Gold | MinIO (parquet) | PostgreSQL | `config.minio_source` |
 | Gold | PostgreSQL | MinIO | `config.minio` |
+
+### Engine de processamento
+
+O engine e opcional e fica no JSON `config`, sem migracao de schema:
+
+| Configuracao | Comportamento |
+|--------------|--------------|
+| ausente ou `"engine": "python"` | Caminho existente com Pandas/SQLAlchemy |
+| `"engine": "sql"` | Caminho legado orientado por `query_source` |
+| `"engine": "spark"` | Leitura, transformacao e escrita com PySpark |
+
+Spark e indicado quando o volume, o particionamento ou transformacoes distribuidas
+justificam o custo de iniciar uma aplicacao. Para tabelas pequenas, consultas que o
+PostgreSQL resolve eficientemente ou cargas simples, Pandas/SQL continuam mais
+baratos, rapidos e faceis de operar. Spark nao e o padrao e nao deve ser usado como
+substituto automatico para todos os steps.
+
+As transforms Spark sao nomes registrados no codigo em
+`src/spark/transformations.py`. A metadata nao aceita codigo Python, modulo para
+importacao, `eval` ou `exec`.
+
+```json
+{
+  "engine": "spark",
+  "transform": "municipios_silver",
+  "minio_source": {
+    "format": "parquet",
+    "object_name": "bronze/municipios/municipios.parquet"
+  },
+  "minio": {
+    "format": "parquet",
+    "object_name": "silver/municipios/"
+  },
+  "spark": {
+    "partition_by": ["uf"]
+  }
+}
+```
+
+O bucket vem de `MINIO_BUCKET`; endpoint e credenciais vem exclusivamente do
+`.env`. O Spark usa S3A com path-style e nunca acessa AWS real. O particionamento
+so ocorre quando `spark.partition_by` e informado.
+
+Para JDBC, omita `minio_source` para ler `query_source` do PostgreSQL e omita
+`minio` para gravar em `schema_destiny.table_destiny`. As connections Airflow da
+camada fornecem host, banco e credenciais. Senhas nao sao registradas em log.
+
+Estrategias suportadas:
+
+| `strategy_destiny` | Spark mode | Observacao |
+|--------------------|------------|------------|
+| `truncate` | `overwrite` | JDBC usa tambem a opcao `truncate=true` |
+| `replace` | `overwrite` | Substitui o destino |
+| `append` | `append` | Acrescenta dados |
+| `fail` | `errorifexists` | Falha se o destino existir |
+
+Qualquer estrategia diferente falha explicitamente; nao existe fallback silencioso.
+
+### Demonstracao Spark completa
+
+O setup registra, de forma idempotente, o projeto `municipios_ibge_lakehouse`:
+
+```text
+CSV -> Bronze Parquet (MinIO)
+    -> municipios_silver (Spark) -> Silver Parquet particionado por uf
+    -> municipios_gold (Spark)   -> Gold Parquet
+```
+
+Ele nao substitui `municipios_ibge`, portanto o demonstrador PostgreSQL anterior
+continua disponivel. Como o projeto Lakehouse nao tem cron proprio, execute a DAG
+geral `elt_pipeline`. Depois valide os dados de verdade:
+
+```powershell
+docker exec elt-airflow-scheduler python /opt/airflow/elt/tests/integration_spark_pipeline.py
+```
+
+O teste le Silver e Gold pelo S3A, valida unicidade na Silver, nove UFs na Gold e
+a reconciliacao das contagens.
+
+### Spark no Data Lab
+
+Os notebooks introdutorios permanecem intactos e podem continuar em modo local.
+Para explorar os dados produzidos pelo pipeline usando a mesma configuracao do
+framework:
+
+```python
+from elt.src.spark.session import get_spark_session
+
+spark = get_spark_session("data-lab-exploracao")
+df = spark.read.parquet("s3a://elt-datalake/silver/municipios/")
+df.show()
+```
+
+O Jupyter e ambiente de estudo e exploracao; o executor principal do ELT continua
+sendo o Airflow, conectado ao Spark master.
+
+### Observabilidade e troubleshooting
+
+Os logs de cada step Spark incluem projeto, layer, origem/destino, app name,
+formatos, particoes e duracao. Contagens exigem uma action adicional e, por isso,
+so sao calculadas quando `spark.count_records=true`.
+
+```powershell
+.\setup.ps1 -Status
+.\setup.ps1 -Logs            # opcoes spark-master e spark-worker
+docker compose logs airflow-scheduler spark-master spark-worker
+```
+
+- Spark UI sem aplicacoes: confirme que a DAG geral chegou ao task Silver.
+- `ClassNotFoundException` para S3A/JDBC: reconstrua as imagens com `docker compose build --no-cache`.
+- Falha S3A: confira `MINIO_ENDPOINT`, `MINIO_BUCKET`, access key e secret key no `.env`.
+- Driver inacessivel: mantenha `SPARK_DRIVER_HOST=airflow-scheduler` no Airflow e `jupyter` no Data Lab.
+- Falta de memoria: reduza paralelismo/particoes ou ajuste os limites do worker; nao aumente recursos sem considerar Jupyter e OpenMetadata.
+
+O OpenMetadata continua catalogando os ativos PostgreSQL e o pipeline Airflow. Os
+prefixos Parquet Bronze/Silver/Gold no MinIO ainda nao sao entidades catalogadas
+automaticamente nesta etapa; o fluxo Spark nao publica lineage via OpenLineage.
+Essa limitacao e intencional para evitar uma integracao de governanca desproporcional.
 
 ### 4. DAGs geradas automaticamente
 

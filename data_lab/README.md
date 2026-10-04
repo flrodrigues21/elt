@@ -36,3 +36,14 @@ Data Lab/
 - Nenhum dado real ou credencial e incluido
 - O diretorio `ELT/` no JupyterLab e **somente leitura** (codigo-fonte do projeto)
 - O diretorio `Data Lab/` e **gravavel** (para seus exercicios)
+- Os notebooks introdutorios preservam sessoes locais e independentes para estudo
+- Para explorar o pipeline real, use a sessao central e o cluster da stack:
+
+```python
+from elt.src.spark.session import get_spark_session
+
+spark = get_spark_session("data-lab")
+spark.read.parquet("s3a://elt-datalake/silver/municipios/").show()
+```
+
+O Data Lab nao executa as DAGs; Airflow continua sendo o orquestrador do ELT.
