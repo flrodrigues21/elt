@@ -316,6 +316,10 @@ if ($legacyContainers) {
     throw "Stack legada elt-openmetadata detectada. Consulte a secao de upgrade do README; os volumes nao foram alterados."
 }
 
+Write-Header "Preparando permissoes do volume MinIO"
+docker compose run --rm --no-deps --user root --entrypoint /bin/bash minio -c 'owner=$(stat -c %u /bitnami/minio/data); if [ "$owner" != "1001" ]; then chown -R 1001:0 /bitnami/minio/data; fi'
+Assert-ExitCode $LASTEXITCODE "preparacao do volume MinIO"
+
 Write-Header "Subindo PostgreSQL + MinIO no projeto Docker elt"
 $ErrorActionPreferenceOld = $ErrorActionPreference
 $ErrorActionPreference = "SilentlyContinue"

@@ -268,6 +268,13 @@ class TestSetupPs1:
         content = SETUP_PS1.read_text(encoding="utf-8")
         assert "jupyter" in content.lower()
 
+    def test_migrates_legacy_minio_volume_permissions_before_startup(self):
+        content = SETUP_PS1.read_text(encoding="utf-8")
+        migration = "chown -R 1001:0 /bitnami/minio/data"
+        startup = "docker compose up -d --build postgres minio"
+        assert migration in content
+        assert content.index(migration) < content.index(startup)
+
 
 # =====================================================================
 # .env.example validation
