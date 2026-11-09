@@ -120,66 +120,83 @@ Para ver as credenciais, abra o arquivo `.env` na raiz do projeto.
 ## Arquitetura
 
 ```mermaid
-flowchart LR
+flowchart TB
     SRC["Sources<br/>CSV, APIs, FTP, Sheets,<br/>PostgreSQL, Oracle, S3/CKAN"]
-    CFG["elt.global.schedule<br/>Metadata-driven configuration"]
+    CFG["elt.global.schedule<br/>Metadata and job configuration"]
     AF["Apache Airflow<br/>Orchestration"]
-    ENG{"Processing engine"}
-    LEG["Python / SQL<br/>Pandas and PostgreSQL"]
-    SP["Spark 3.5<br/>Standalone cluster"]
-    B["Bronze<br/>Raw ingestion"]
-    S["Silver<br/>Cleansing and transformation"]
-    G["Gold<br/>Dimensional and aggregated data"]
-    BI["Analytics / BI<br/>Data consumers"]
-    PG[("PostgreSQL<br/>ELT layers and control")]
-    MIO[("MinIO / Parquet<br/>Data Lake option")]
-    LAB["Jupyter Data Lab<br/>Python, SQL and PySpark"]
-    OM["OpenMetadata<br/>Catalog and Metadata Platform"]
-    GOV["Governance<br/>Dictionary, Glossary,<br/>Ownership and Classification"]
-    LIN["Lineage<br/>Table and Column level"]
-    DQ["Data Quality<br/>Tests and Results"]
 
-    CFG --> AF --> ENG
-    ENG --> LEG
-    ENG --> SP
-    SRC --> AF --> B --> S --> G --> BI
-    LEG --> S
-    SP --> S
-    SP --> G
-    B --- PG
-    S --- PG
-    G --- PG
-    B -. configurable storage .-> MIO
-    S -. configurable storage .-> MIO
-    G -. configurable storage .-> MIO
-    PG --> LAB
-    MIO --> LAB
-    LAB --> BI
+    subgraph ENGINES["Processing engines"]
+        PYSQL["Python / Pandas / SQL"]
+        SPARK["PySpark<br/>Spark 3.5"]
+    end
 
-    PG -. technical metadata .-> OM
-    AF -. operational metadata .-> OM
+    subgraph LAYERS["Logical data layers"]
+        direction LR
+        B["Bronze<br/>Raw data"] --> S["Silver<br/>Clean and standardized data"] --> G["Gold<br/>Modeled and aggregated data"]
+        G -.->|optional evolution| D["Diamond<br/>Optional specialized consumption layer"]
+    end
+
+    subgraph STORAGE["Configurable storage options"]
+        direction LR
+        PG[("PostgreSQL")]
+        MIO[("MinIO / Parquet<br/>S3-compatible Data Lake")]
+    end
+
+    CONSUMERS["Jupyter / Analytics / BI<br/>Data consumers"]
+    OM["OpenMetadata<br/>Catalog and Governance"]
+    GOV["Dictionary, Glossary, Ownership,<br/>Classification, Lineage and Data Quality"]
+
+    SRC --> AF
+    CFG -->|controls jobs| AF
+    AF --> PYSQL
+    AF --> SPARK
+    PYSQL --> B
+    SPARK --> B
+
+    B -.->|configured persistence| PG
+    S -.->|configured persistence| PG
+    G -.->|configured persistence| PG
+    D -.->|if adopted| PG
+    B -.->|configured persistence| MIO
+    S -.->|configured persistence| MIO
+    G -.->|configured persistence| MIO
+    D -.->|if adopted| MIO
+
+    PG --> CONSUMERS
+    MIO --> CONSUMERS
+    AF -.->|operational metadata| OM
+    PG -.->|technical metadata| OM
+    MIO -.->|data assets| OM
     OM --> GOV
-    OM --> LIN
-    OM --> DQ
 ```
 
-O Airflow interpreta a tabela `elt.global.schedule`, resolve `config.engine` e gera
-os fluxos por projeto. A ausencia de `engine` preserva a execucao Python/Pandas
-anterior; `engine=spark` usa o cluster standalone. Cada camada pode persistir em
-PostgreSQL ou MinIO conforme a configuracao do job.
-O OpenMetadata cataloga os bancos e o pipeline, centralizando metadados tecnicos,
-de negocio e operacionais.
+O Airflow interpreta a tabela `elt.global.schedule`, resolve o engine de
+processamento e executa os fluxos por projeto. Bronze, Silver e Gold representam
+camadas logicas de dados e nao estao vinculadas a um storage especifico. Cada
+etapa pode persistir em PostgreSQL ou MinIO/Parquet conforme a configuracao do
+job. O MinIO atua como Data Lake S3-compativel e pode armazenar dados de Bronze,
+Silver, Gold e, futuramente, de uma camada Diamond opcional.
+
+Python/Pandas, SQL e PySpark sao engines de processamento, enquanto PostgreSQL e
+MinIO/Parquet sao opcoes de persistencia. O OpenMetadata cataloga os bancos, os
+ativos e o pipeline, centralizando metadados tecnicos, de negocio e operacionais
+sem alterar o fluxo funcional.
 
 ### Camadas (Medallion Architecture)
 
-| Camada | Descricao | Destino |
-|--------|-----------|---------|
-| **Bronze** | Extracao de dados brutos de fontes heterogeneas | PostgreSQL `bronze` ou MinIO (parquet) |
-| **Silver** | Transformacao/limpeza via Pandas/SQL ou PySpark | PostgreSQL `silver` ou MinIO (parquet) |
-| **Gold** | Modelo dimensional e agregacoes via Pandas/SQL ou PySpark | PostgreSQL `gold` ou MinIO (parquet) |
-| **Controle** | Tabela de schedule e log de execucoes | PostgreSQL `elt` |
+| Camada | Estado | Descricao | Storage |
+|--------|--------|-----------|---------|
+| **Bronze** | Implementada | Dados brutos de fontes heterogeneas | PostgreSQL ou MinIO/Parquet |
+| **Silver** | Implementada | Dados limpos e padronizados | PostgreSQL ou MinIO/Parquet |
+| **Gold** | Implementada | Dados modelados e agregados | PostgreSQL ou MinIO/Parquet |
+| **Diamond** | Opcional / evolucao arquitetural | Dados altamente refinados ou especializados para consumo | Configuravel; PostgreSQL ou MinIO/Parquet quando adotada |
 
-> Cada camada pode gravar em **PostgreSQL** (padrao) ou **MinIO** (parquet), basta configurar via `config` na tabela `schedule`.
+> As camadas sao logicas e independentes do storage. O destino de cada job e
+> definido em `config` na tabela `elt.global.schedule`. A camada Diamond representa
+> apenas uma possibilidade futura e nao uma funcionalidade implementada.
+
+A tabela de schedule e os logs de execucao pertencem ao plano de controle no
+PostgreSQL `elt`; eles nao constituem uma camada Medallion.
 
 ### Bancos de Dados
 
