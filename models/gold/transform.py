@@ -9,6 +9,7 @@ from elt.src.schedule.schedule_table import load_schedule_table, get_steps
 from elt.src.connectors.postgres_connector import PostgresConnector, registrar_execucao
 from elt.src.connectors.minio_connector import MinioConnector
 from elt.src.connectors.airflow_connections import AirflowConnector
+from elt.src.processing.config import resolve_engine
 from elt.src.utils.validation import validate_identifier, validate_strategy
 
 load_dotenv()
@@ -83,10 +84,25 @@ def transform(
         validate_identifier(table_destiny, "table_destiny")
         validate_identifier(schema_destiny, "schema_destiny")
         config = _parse_config(row.to_dict())
+        engine = resolve_engine(config)
         minio_source_config = config.get("minio_source")
 
         try:
-            if minio_source_config:
+            if engine == "spark":
+                from elt.src.processing.spark_executor import execute_spark_step
+
+                source_credentials = {}
+                if not minio_source_config:
+                    if postgres_origem is None:
+                        postgres_origem, cred_origem = connect_db(connection_origem_id)
+                    source_credentials = cred_origem
+                spark_result = execute_spark_step(
+                    row.to_dict(),
+                    source_credentials,
+                    cred_destino,
+                )
+                record_count = spark_result["records"]
+            elif minio_source_config:
                 minio_src = MinioConnector(minio_source_config)
                 fmt = minio_source_config.get("format", "parquet")
                 object_name = minio_source_config.get(
@@ -112,29 +128,31 @@ def transform(
                 df = pd.read_sql(text(query), postgres_origem.engine)
                 logging.info(f"[GOLD] Lido {len(df)} registros da origem")
 
-            minio_sink_config = config.get("minio")
-            if minio_sink_config:
-                minio_conn = MinioConnector(minio_sink_config)
-                fmt = minio_sink_config.get("format", "parquet")
-                object_name = minio_sink_config.get(
-                    "object_name", f"{table_destiny}.{fmt}"
-                )
-                minio_conn.upload_dataframe(
-                    df=df,
-                    object_name=object_name,
-                    format=fmt,
-                )
-                logging.info(
-                    f"[GOLD] Enviado para MinIO: {object_name} ({len(df)} registros)"
-                )
-            else:
-                postgres_destino.write_dataframe(
-                    df=df,
-                    table_name=table_destiny,
-                    schema=schema_destiny,
-                    if_exists=strategy
-                )
-                logging.info(f"[GOLD] Tabela {schema_destiny}.{table_destiny} criada/atualizada com {len(df)} registros")
+            if engine != "spark":
+                minio_sink_config = config.get("minio")
+                if minio_sink_config:
+                    minio_conn = MinioConnector(minio_sink_config)
+                    fmt = minio_sink_config.get("format", "parquet")
+                    object_name = minio_sink_config.get(
+                        "object_name", f"{table_destiny}.{fmt}"
+                    )
+                    minio_conn.upload_dataframe(
+                        df=df,
+                        object_name=object_name,
+                        format=fmt,
+                    )
+                    logging.info(
+                        f"[GOLD] Enviado para MinIO: {object_name} ({len(df)} registros)"
+                    )
+                else:
+                    postgres_destino.write_dataframe(
+                        df=df,
+                        table_name=table_destiny,
+                        schema=schema_destiny,
+                        if_exists=strategy
+                    )
+                    logging.info(f"[GOLD] Tabela {schema_destiny}.{table_destiny} criada/atualizada com {len(df)} registros")
+                record_count = len(df)
 
             pos_query = row.get('pos_query')
             if pos_query:
@@ -146,7 +164,7 @@ def transform(
 
             resultados[table_destiny] = {
                 'status': 'sucesso',
-                'registros': len(df)
+                'registros': record_count
             }
 
             registrar_execucao(
@@ -156,13 +174,17 @@ def transform(
                 database_destino=cred_destino['database'],
                 schema_destino=schema_destiny,
                 status='sucesso',
-                registros=len(df),
+                registros=record_count,
                 layer='gold',
                 type_source='MINIO' if minio_source_config else 'DW',
                 trigger_type=trigger_type,
             )
 
-            logging.info(f"[GOLD] Finalizado: {schema_destiny}.{table_destiny} ({len(df)} registros)")
+            count_log = record_count if record_count is not None else "nao contado"
+            logging.info(
+                f"[GOLD] Finalizado: {schema_destiny}.{table_destiny} "
+                f"({count_log} registros, engine={engine})"
+            )
 
         except Exception as e:
             erro_msg = str(e)

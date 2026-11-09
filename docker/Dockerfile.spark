@@ -1,0 +1,36 @@
+FROM jupyter/pyspark-notebook:python-3.11@sha256:7d0b19de594978b8c0541194d91e29abba40e20aa124873bcf5e9cda2fe037f7
+
+USER root
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
+USER ${NB_UID}
+
+RUN pip install --no-cache-dir pyspark==3.5.0
+
+USER root
+
+RUN SPARK_PACKAGE="$(python -c 'import pathlib, pyspark; print(pathlib.Path(pyspark.__file__).parent)')" && \
+    rm -rf /opt/spark && \
+    ln -s "$SPARK_PACKAGE" /opt/spark && \
+    curl --fail --location --retry 3 -o "/opt/spark/jars/hadoop-aws-3.3.4.jar" \
+        https://repo.maven.apache.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar && \
+    curl --fail --location --retry 3 -o "/opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar" \
+        https://repo.maven.apache.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar && \
+    curl --fail --location --retry 3 -o "/opt/spark/jars/postgresql-42.7.4.jar" \
+        https://repo.maven.apache.org/maven2/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar && \
+    echo "a65839fbf1869f81a1632e09f415e586922e4f80  /opt/spark/jars/hadoop-aws-3.3.4.jar" | sha1sum -c - && \
+    echo "02deec3a0ad83d13d032b1812421b23d7a961eea  /opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar" | sha1sum -c - && \
+    echo "264310fd7b2cd76738787dc0b9f7ea2e3b11adc1  /opt/spark/jars/postgresql-42.7.4.jar" | sha1sum -c -
+
+USER ${NB_UID}
+
+ENV SPARK_HOME=/opt/spark \
+    PYSPARK_PYTHON=python \
+    PYTHONPATH=/opt
+
+WORKDIR /opt/elt
+
+ENTRYPOINT ["tini", "--"]

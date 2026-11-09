@@ -147,7 +147,7 @@ def registrar_execucao(
     processo: str,
     tabela_destino: str,
     status: str,
-    registros: int = 0,
+    registros: int | None = 0,
     erro: str | None = None,
     metadados: dict | None = None,
     projeto: str | None = None,
